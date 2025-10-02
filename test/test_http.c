@@ -14,7 +14,7 @@ int test_http() {
 
     // 例子: GET
     const char* headers1[] = { "User-Agent: StealthIM-C/0.1", "Accept: */*", NULL };
-    if (stealthim_http_request("GET", "postman-echo.com", 80, "/get?foo1=bar1&foo2=bar2", headers1, NULL, buffer, sizeof(buffer)) == STEALTHIM_OK) {
+    if (stealthim_http_request("GET", "postman-echo.com", 443, "/get?foo1=bar1&foo2=bar2", headers1, NULL, buffer, sizeof(buffer)) == STEALTHIM_OK) {
         printf("GET Response:\n%s\n", buffer);
     } else {
         return -1;
