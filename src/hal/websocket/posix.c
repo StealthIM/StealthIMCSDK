@@ -1,25 +1,26 @@
 #include "stealthim/hal/websocket.h"
 
-#ifdef STEALTHIM_WS_WIN32
+#ifdef STEALTHIM_WS_POSIX
 
 #include "stealthim/hal/tls.h"
 
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <windows.h>
-#include <wincrypt.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/select.h>
+#include <netdb.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <time.h>
 
 #include "stealthim/hal/logging.h"
 #include "stealthim/hal/tools.h"
 
-#pragma comment(lib, "ws2_32.lib")
-#pragma comment(lib, "crypt32.lib")
-
 struct stealthim_ws_t {
-    SOCKET sock;
+    int sock;
     char sec_key[64];
     int use_tls;
     stealthim_tls_ctx_t* tls;
@@ -27,27 +28,42 @@ struct stealthim_ws_t {
 
 // ================== 工具函数 ===================
 
+// 简单 Base64 实现 (避免依赖 openssl/base64)
+static const char b64_table[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
 static int base64_encode(const unsigned char* src, int len, char* out, int out_size) {
-    DWORD out_len = out_size;
-    if (!CryptBinaryToStringA(src, len, CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, out, &out_len))
-        return -1;
-    return (int)out_len - 1;
+    int olen = 4 * ((len + 2) / 3);
+    if (out_size < olen + 1) return -1;
+    int i, j;
+    for (i=0, j=0; i<len;) {
+        uint32_t octet_a = i < len ? src[i++] : 0;
+        uint32_t octet_b = i < len ? src[i++] : 0;
+        uint32_t octet_c = i < len ? src[i++] : 0;
+        uint32_t triple = (octet_a << 16) | (octet_b << 8) | octet_c;
+
+        out[j++] = b64_table[(triple >> 18) & 0x3F];
+        out[j++] = b64_table[(triple >> 12) & 0x3F];
+        out[j++] = (i > len + 1) ? '=' : b64_table[(triple >> 6) & 0x3F];
+        out[j++] = (i > len)     ? '=' : b64_table[triple & 0x3F];
+    }
+    out[j] = '\0';
+    return j;
 }
 
 static void generate_websocket_key(char out[64]) {
-    HCRYPTPROV hProv = 0;
     unsigned char rand_bytes[16];
-    if (!CryptAcquireContext(&hProv, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT)) {
-        for (int i=0; i<16; i++) rand_bytes[i] = (unsigned char)(rand() & 0xFF);
+    FILE* f = fopen("/dev/urandom", "rb");
+    if (f) {
+        fread(rand_bytes, 1, 16, f);
+        fclose(f);
     } else {
-        CryptGenRandom(hProv, 16, rand_bytes);
-        CryptReleaseContext(hProv, 0);
+        for (int i=0; i<16; i++) rand_bytes[i] = rand() & 0xFF;
     }
     base64_encode(rand_bytes, 16, out, 64);
 }
 
 static int parse_url(const char* url, int* is_tls, char* host, int* port, char* path) {
-    // 支持 ws://host:port/path 和 wss://host:port/path
     if (strncmp(url, "ws://", 5) == 0) {
         *is_tls = 0;
         url += 5;
@@ -69,7 +85,7 @@ static int parse_url(const char* url, int* is_tls, char* host, int* port, char* 
     } else {
         strncpy(host, url, slash - url);
         host[slash - url] = 0;
-        *port = *is_tls ? 443 : 80; // 默认端口
+        *port = *is_tls ? 443 : 80;
     }
 
     strcpy(path, (*slash ? slash : "/"));
@@ -79,9 +95,7 @@ static int parse_url(const char* url, int* is_tls, char* host, int* port, char* 
 // ================== API 实现 ===================
 
 void stealthim_ws_init() {
-    WSADATA wsa;
-    WSAStartup(MAKEWORD(2,2), &wsa);
-    stealthim_tls_init(); // 初始化 TLS 库
+    stealthim_tls_init();
     srand(time(NULL));
 }
 
@@ -94,21 +108,16 @@ stealthim_ws_t* stealthim_ws_connect(const char* url) {
     ws->use_tls = is_tls;
 
     if (is_tls) {
-        // TLS 连接
         ws->tls = stealthim_tls_create();
-        if (!ws->tls) {
-            free(ws);
-            return NULL;
-        }
+        if (!ws->tls) { free(ws); return NULL; }
         if (stealthim_tls_connect(ws->tls, host, port) != 0) {
             stealthim_tls_destroy(ws->tls);
             free(ws);
             return NULL;
         }
     } else {
-        // 普通 TCP 连接
         struct addrinfo hints = {0}, *res = NULL;
-        hints.ai_family = AF_INET;
+        hints.ai_family = AF_UNSPEC;
         hints.ai_socktype = SOCK_STREAM;
 
         char portstr[16];
@@ -119,10 +128,12 @@ stealthim_ws_t* stealthim_ws_connect(const char* url) {
             return NULL;
         }
 
-        SOCKET s = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-        if (connect(s, res->ai_addr, (int)res->ai_addrlen) != 0) {
+        int s = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+        if (s < 0) { freeaddrinfo(res); free(ws); return NULL; }
+
+        if (connect(s, res->ai_addr, res->ai_addrlen) != 0) {
+            close(s);
             freeaddrinfo(res);
-            closesocket(s);
             free(ws);
             return NULL;
         }
@@ -130,10 +141,8 @@ stealthim_ws_t* stealthim_ws_connect(const char* url) {
         ws->sock = s;
     }
 
-    // 生成 key
     generate_websocket_key(ws->sec_key);
 
-    // 发送握手请求
     char req[1024];
     snprintf(req, sizeof(req),
         "GET %s HTTP/1.1\r\n"
@@ -145,36 +154,24 @@ stealthim_ws_t* stealthim_ws_connect(const char* url) {
         "\r\n",
         path, host, port, ws->sec_key);
 
-    if (is_tls) {
-        if (stealthim_tls_send(ws->tls, req, (int)strlen(req)) <= 0) {
-            stealthim_tls_close(ws->tls);
-            stealthim_tls_destroy(ws->tls);
-            free(ws);
-            return NULL;
-        }
-    } else {
-        if (send(ws->sock, req, (int)strlen(req), 0) <= 0) {
-            closesocket(ws->sock);
-            free(ws);
-            return NULL;
-        }
-    }
+    int ret;
+    if (is_tls)
+        ret = stealthim_tls_send(ws->tls, req, strlen(req));
+    else
+        ret = send(ws->sock, req, strlen(req), 0);
+    if (ret <= 0) { stealthim_ws_close(ws); return NULL; }
 
-    // 读取响应
     char buf[1024];
     int n = is_tls ? stealthim_tls_recv(ws->tls, buf, sizeof(buf)-1)
                    : recv(ws->sock, buf, sizeof(buf)-1, 0);
-    if (n <= 0) {
-        stealthim_ws_close(ws);
-        return NULL;
-    }
+    if (n <= 0) { stealthim_ws_close(ws); return NULL; }
     buf[n] = 0;
 
-    if (strstr(buf, "101") == NULL || strcasestr(buf, "Sec-WebSocket-Accept") == NULL) {
+    if (!strstr(buf, "101") || !strcasestr(buf, "Sec-WebSocket-Accept")) {
         stealthim_ws_close(ws);
         return NULL;
     }
-    stealthim_log_debug("Full WebSocket handshake completed");
+    stealthim_log_debug("WebSocket handshake complete");
 
     return ws;
 }
@@ -202,18 +199,13 @@ stealthim_ws_status_t stealthim_ws_send(stealthim_ws_t* ws, const void* data, in
     memcpy(header + hlen, mask, 4);
     hlen += 4;
 
-    char* frame = (char*)malloc(hlen + len);
+    char* frame = malloc(hlen + len);
     memcpy(frame, header, hlen);
-    for (int i=0; i<len; i++) {
-        frame[hlen+i] = ((char*)data)[i] ^ mask[i % 4];
-    }
+    for (int i=0; i<len; i++) frame[hlen+i] = ((char*)data)[i] ^ mask[i % 4];
 
-    int ret;
-    if (ws->use_tls)
-        ret = stealthim_tls_send(ws->tls, frame, hlen + len);
-    else
-        ret = send(ws->sock, frame, hlen + len, 0);
-
+    int ret = ws->use_tls ?
+              stealthim_tls_send(ws->tls, frame, hlen + len) :
+              send(ws->sock, frame, hlen + len, 0);
     free(frame);
     return (ret == hlen + len) ? STEALTHIM_WS_OK : STEALTHIM_WS_ERR;
 }
@@ -259,9 +251,8 @@ int stealthim_ws_recv(stealthim_ws_t* ws, void* buffer, int maxlen, int* is_text
     if (n != len) return STEALTHIM_WS_ERR;
 
     if (masked) {
-        for (int i=0; i<len; i++) {
+        for (int i=0; i<len; i++)
             ((char*)buffer)[i] ^= mask[i % 4];
-        }
     }
 
     if (is_text) *is_text = (opcode == 0x1);
@@ -277,9 +268,9 @@ void stealthim_ws_close(stealthim_ws_t* ws) {
         stealthim_tls_destroy(ws->tls);
     } else {
         send(ws->sock, (char*)closef, 2, 0);
-        closesocket(ws->sock);
+        close(ws->sock);
     }
     free(ws);
 }
 
-#endif
+#endif // STEALTHIM_WS_POSIX
