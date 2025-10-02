@@ -1,4 +1,7 @@
 #include "stealthim/hal/tls.h"
+
+#ifdef STEALTHIM_TLS_OPENSSL
+
 #include "stealthim/hal/logging.h"
 
 #include <stdio.h>
@@ -97,6 +100,7 @@ int stealthim_tls_connect(stealthim_tls_ctx_t* ctx, const char* host, int port) 
     ctx->ssl = SSL_new(ctx->ctx);
     if (!ctx->ssl) return -1;
     SSL_set_fd(ctx->ssl, ctx->sock);
+    SSL_set_tlsext_host_name(ctx->ssl, host);
     if (SSL_connect(ctx->ssl) <= 0) {
         SSL_free(ctx->ssl);
         ctx->ssl = NULL;
@@ -126,3 +130,5 @@ int stealthim_tls_recv(stealthim_tls_ctx_t* ctx, char* buf, int maxlen) {
     if (!ctx || !ctx->ssl) return -1;
     return SSL_read(ctx->ssl, buf, maxlen);
 }
+
+#endif

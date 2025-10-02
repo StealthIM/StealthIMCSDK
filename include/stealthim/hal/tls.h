@@ -1,4 +1,5 @@
 #pragma once
+#include <stealthim/config.h>
 
 #ifdef __cplusplus
 extern "C" {
