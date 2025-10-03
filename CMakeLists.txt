@@ -17,6 +17,8 @@ add_library(stealthim STATIC
         src/hal/websocket/none.c
         src/hal/websocket/win32.c
         src/hal/websocket/posix.c
+        include/stealthim/hal/loop.h
+        src/hal/loop/windows.c
 )
 
 if(WIN32)
@@ -31,8 +33,10 @@ add_executable(stealthim_tests
         test/main.c
         test/test_http.c
         test/test_ws.c
+        test/test_loop.c
 )
 target_link_libraries(stealthim_tests stealthim)
 
 add_test(NAME test_http COMMAND stealthim_tests http)
 add_test(NAME test_ws COMMAND stealthim_tests ws)
+add_test(NAME test_loop COMMAND stealthim_tests loop)
