@@ -19,6 +19,7 @@ add_library(stealthim STATIC
         src/hal/websocket/posix.c
         include/stealthim/hal/loop.h
         src/hal/loop/windows.c
+        src/hal/loop/linux.c
 )
 
 if(WIN32)

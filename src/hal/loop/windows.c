@@ -9,16 +9,14 @@
 #include <stdint.h>
 #include <stdio.h>
 
-
 #pragma comment(lib, "ws2_32.lib")
 
 typedef struct timer_req_s {
     loop_cb_t cb;
     void *userdata;
     timer_id_t id;
-    loop_t *loop;
-    HANDLE hTimer;
-    struct timer_req_s *next;
+    uint64_t expire_ms;
+    int cancelled;
 } timer_req_t;
 
 typedef struct handle_req_s {
@@ -30,30 +28,25 @@ typedef struct handle_req_s {
 
 struct loop_s {
     HANDLE iocp;
-    HANDLE timer_queue;
     volatile LONG next_timer_id;
     int stop_flag;
     HANDLE thread;
     CRITICAL_SECTION lock;
-    timer_req_t *timers;
+
+    timer_req_t **heap;   // 最小堆存储定时器
+    int heap_size;
+    int heap_cap;
+
     handle_req_t *handles;
 };
 
-typedef struct {
-    loop_cb_t cb;
-    void *userdata;
-} posted_event_t;
-
-typedef enum { EV_TIMER, EV_POST, EV_SOCKET } loop_ev_type_t;
+typedef enum { EV_POST, EV_SOCKET } loop_ev_type_t;
 
 typedef struct loop_event_s {
     OVERLAPPED ov;             // 用于 IOCP
     loop_ev_type_t type;       // 事件类型
     void *userdata;            // 回调要用的 userdata
     union {
-        struct {
-            loop_cb_t cb;
-        } timer;
         struct {
             loop_cb_t cb;
         } post;
@@ -64,52 +57,85 @@ typedef struct loop_event_s {
     };
 } loop_event_t;
 
-// -------------------- 定时器 --------------------
+// -------------------- 最小堆操作 --------------------
 
-static VOID CALLBACK timer_callback(PVOID lpParam, BOOLEAN TimerOrWaitFired) {
-    timer_req_t *req = (timer_req_t*)lpParam;
-
-    loop_event_t *ev = (loop_event_t*)calloc(1, sizeof(loop_event_t));
-    ev->type = EV_TIMER;
-    ev->userdata = req->userdata;
-    ev->timer.cb = req->cb;
-
-    PostQueuedCompletionStatus(req->loop->iocp, 0, (ULONG_PTR)req->hTimer, &ev->ov);
+static void heap_swap(timer_req_t **a, timer_req_t **b) {
+    timer_req_t *tmp = *a;
+    *a = *b;
+    *b = tmp;
 }
 
+static void heap_up(timer_req_t **heap, int idx) {
+    while (idx > 0) {
+        int p = (idx - 1) / 2;
+        if (heap[p]->expire_ms <= heap[idx]->expire_ms) break;
+        heap_swap(&heap[p], &heap[idx]);
+        idx = p;
+    }
+}
+
+static void heap_down(timer_req_t **heap, int n, int idx) {
+    while (1) {
+        int l = idx * 2 + 1, r = idx * 2 + 2, smallest = idx;
+        if (l < n && heap[l]->expire_ms < heap[smallest]->expire_ms) smallest = l;
+        if (r < n && heap[r]->expire_ms < heap[smallest]->expire_ms) smallest = r;
+        if (smallest == idx) break;
+        heap_swap(&heap[idx], &heap[smallest]);
+        idx = smallest;
+    }
+}
+
+static void heap_push(loop_t *loop, timer_req_t *t) {
+    if (loop->heap_size == loop->heap_cap) {
+        loop->heap_cap = loop->heap_cap ? loop->heap_cap * 2 : 16;
+        loop->heap = realloc(loop->heap, loop->heap_cap * sizeof(timer_req_t*));
+    }
+    loop->heap[loop->heap_size] = t;
+    heap_up(loop->heap, loop->heap_size);
+    loop->heap_size++;
+}
+
+static timer_req_t* heap_top(loop_t *loop) {
+    return loop->heap_size ? loop->heap[0] : NULL;
+}
+
+static timer_req_t* heap_pop(loop_t *loop) {
+    if (!loop->heap_size) return NULL;
+    timer_req_t *ret = loop->heap[0];
+    loop->heap_size--;
+    if (loop->heap_size > 0) {
+        loop->heap[0] = loop->heap[loop->heap_size];
+        heap_down(loop->heap, loop->heap_size, 0);
+    }
+    return ret;
+}
+
+// -------------------- 定时器 API --------------------
+
 timer_id_t loop_add_timer(loop_t *loop, uint64_t when_ms, loop_cb_t cb, void *userdata) {
-    timer_req_t *req = (timer_req_t*)calloc(1, sizeof(timer_req_t));
+    timer_req_t *req = calloc(1, sizeof(timer_req_t));
     req->cb = cb;
     req->userdata = userdata;
-    req->loop = loop;
     req->id = InterlockedIncrement(&loop->next_timer_id);
-
-    if (!CreateTimerQueueTimer(&req->hTimer, loop->timer_queue,
-        timer_callback, req, (DWORD)when_ms, 0, WT_EXECUTEDEFAULT)) {
-        free(req);
-        return -1;
-    }
+    req->expire_ms = loop_time_ms(loop) + when_ms;
 
     EnterCriticalSection(&loop->lock);
-    req->next = loop->timers;
-    loop->timers = req;
+    heap_push(loop, req);
     LeaveCriticalSection(&loop->lock);
 
+    // 唤醒 IOCP 线程以重新计算超时时间
+    PostQueuedCompletionStatus(loop->iocp, 0, 0, NULL);
     return req->id;
 }
 
 int loop_cancel_timer(loop_t *loop, timer_id_t id) {
     EnterCriticalSection(&loop->lock);
-    timer_req_t **p = &loop->timers;
-    while (*p && (*p)->id != id) p = &(*p)->next;
-    if (*p) {
-        timer_req_t *req = *p;
-        *p = req->next;
-        LeaveCriticalSection(&loop->lock);
-
-        DeleteTimerQueueTimer(loop->timer_queue, req->hTimer, NULL);
-        free(req);
-        return 0;
+    for (int i = 0; i < loop->heap_size; i++) {
+        if (loop->heap[i]->id == id) {
+            loop->heap[i]->cancelled = 1;
+            LeaveCriticalSection(&loop->lock);
+            return 0;
+        }
     }
     LeaveCriticalSection(&loop->lock);
     return -1;
@@ -148,7 +174,7 @@ int loop_register_handle(loop_t *loop, void *handle, loop_cb_t cb, void *userdat
     loop->handles = req;
     LeaveCriticalSection(&loop->lock);
 
-    loop_event_t *ev = (loop_event_t*)calloc(1, sizeof(loop_event_t));
+    loop_event_t *ev = calloc(1, sizeof(loop_event_t));
     ev->type = EV_SOCKET;
     ev->userdata = userdata;
     ev->sock.cb = cb;
@@ -205,42 +231,70 @@ void loop_run_main(loop_t *loop) {
     OVERLAPPED *ov;
 
     while (!loop->stop_flag) {
-        BOOL ok = GetQueuedCompletionStatus(loop->iocp, &bytes, &key, &ov, INFINITE);
+        uint64_t now = loop_time_ms(loop);
+        DWORD timeout = INFINITE;
+
+        EnterCriticalSection(&loop->lock);
+        timer_req_t *top = heap_top(loop);
+        if (top) {
+            if (top->expire_ms <= now) {
+                heap_pop(loop);
+                if (!top->cancelled) {
+                    loop_cb_t cb = top->cb;
+                    void *ud = top->userdata;
+                    LeaveCriticalSection(&loop->lock);
+                    cb(loop, ud);
+                    free(top);
+                    continue;
+                }
+                free(top);
+            } else {
+                uint64_t diff = top->expire_ms - now;
+                timeout = (DWORD)diff;
+            }
+        }
+        LeaveCriticalSection(&loop->lock);
+
+        BOOL ok = GetQueuedCompletionStatus(loop->iocp, &bytes, &key, &ov, timeout);
         if (!ok && ov == NULL) continue;
         if (!ov) continue;
 
         loop_event_t *ev = (loop_event_t*)ov;
 
         switch (ev->type) {
-        case EV_TIMER:
-            ev->timer.cb(loop, ev->userdata);
-            free(ev);
-            break;
         case EV_POST:
             ev->post.cb(loop, ev->userdata);
             free(ev);
             break;
-        case EV_SOCKET:
+        case EV_SOCKET: {
             recv_data_t data = {
                 .userdata = ev->userdata,
                 .data = ev->sock.handle->buf,
                 .len = bytes
             };
             ev->sock.cb(loop, &data);
+            if (bytes == 0) {
+                loop_unregister_handle(loop, (void*)ev->sock.handle->sock);
+                break;
+            }
 
-            // 重新发起 WSARecv
             DWORD flags = 0;
-            WSABUF wbuf = {.buf=ev->sock.handle->buf, .len=ev->sock.handle->buf_len};
-            WSARecv(
-                key,
-                &(WSABUF){.buf=ev->sock.handle->buf, .len=ev->sock.handle->buf_len},
-                1,
-                NULL,
-                &flags,
-                &ev->ov,
-                NULL
-                );
+            DWORD rec_bytes;
+            ZeroMemory(ev->sock.handle->buf, ev->sock.handle->buf_len);
+            ZeroMemory(&ev->ov, sizeof(OVERLAPPED));
+            int ret = WSARecv(ev->sock.handle->sock,
+                              &(WSABUF){ .buf = ev->sock.handle->buf, .len = ev->sock.handle->buf_len },
+                              1,
+                              &rec_bytes,
+                              &flags,
+                              &ev->ov,
+                              NULL);
+            if (ret == SOCKET_ERROR && WSAGetLastError() != WSA_IO_PENDING) {
+                loop_unregister_handle(loop, (void*)ev->sock.handle->sock);
+                break;
+            }
             break;
+        }
         }
     }
 }
@@ -259,7 +313,6 @@ loop_t *loop_create(const char *backend_name) {
 
     loop_t *loop = (loop_t*)calloc(1, sizeof(loop_t));
     loop->iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1);
-    loop->timer_queue = CreateTimerQueue();
     loop->next_timer_id = 1;
     InitializeCriticalSection(&loop->lock);
     return loop;
@@ -283,12 +336,14 @@ void loop_destroy(loop_t *loop) {
     if (!loop) return;
     loop_stop(loop);
 
-    DeleteTimerQueueEx(loop->timer_queue, INVALID_HANDLE_VALUE);
     CloseHandle(loop->iocp);
 
     EnterCriticalSection(&loop->lock);
-    timer_req_t *t = loop->timers;
-    while (t) { timer_req_t *next = t->next; free(t); t = next; }
+    for (int i = 0; i < loop->heap_size; i++) {
+        free(loop->heap[i]);
+    }
+    free(loop->heap);
+
     handle_req_t *h = loop->handles;
     while (h) { handle_req_t *next = h->next; closesocket(h->sock); free(h->buf); free(h); h = next; }
     LeaveCriticalSection(&loop->lock);
@@ -309,4 +364,3 @@ uint64_t loop_time_ms(loop_t *loop) {
 }
 
 #endif
-

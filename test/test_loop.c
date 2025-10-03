@@ -1,14 +1,51 @@
+// test_loop_http.c
 #include <stdio.h>
-#include <windows.h>
-#include <winsock2.h>
-#include <ws2tcpip.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
+
+#ifdef _WIN32
+  #define WIN32_LEAN_AND_MEAN
+  #include <windows.h>
+  #include <winsock2.h>
+  #include <ws2tcpip.h>
+  #pragma comment(lib, "ws2_32.lib")
+  typedef SOCKET socket_t;
+#else
+  #include <unistd.h>
+  #include <errno.h>
+  #include <sys/types.h>
+  #include <sys/socket.h>
+  #include <netinet/in.h>
+  #include <arpa/inet.h>
+  #include <netdb.h>
+  #include <time.h>
+  #include <fcntl.h>
+  typedef int socket_t;
+  #ifndef INVALID_SOCKET
+    #define INVALID_SOCKET (-1)
+  #endif
+  #ifndef SOCKET_ERROR
+    #define SOCKET_ERROR   (-1)
+  #endif
+  #define closesocket close
+#endif
 
 #include "stealthim/hal/loop.h"
 
 static void socket_cb(loop_t *loop, void *userdata) {
     recv_data_t *data = (recv_data_t*)userdata;
-    printf("Socket event: \n%s\n, data length: %lu\n", data->data, data->len);
+    if (data->len == 0) {
+        printf("Connection closed by peer\n");
+        return;
+    }
+
+    data->data[data->len] = '\0'; // 确保字符串结束
+
+    printf("Received %lu bytes:\n", data->len);
+    printf("%s\n", data->data);
 }
+
 
 static void timer1_cb(loop_t *loop, void *userdata) {
     printf("Timer1 fired: %s\n", (const char*)userdata);
@@ -29,61 +66,115 @@ static void timer3_cb(loop_t *loop, void *userdata) {
     }
 }
 
+static void sleep_ms(unsigned int ms) {
+#ifdef _WIN32
+    Sleep(ms);
+#else
+    struct timespec ts;
+    ts.tv_sec = ms/1000;
+    ts.tv_nsec = (ms%1000)*1000000;
+    nanosleep(&ts, NULL);
+#endif
+}
+
 int test_loop() {
+#ifdef _WIN32
     WSADATA wsaData;
-    SOCKET sock = INVALID_SOCKET;
-    struct sockaddr_in serverAddr;
+    if (WSAStartup(MAKEWORD(2,2), &wsaData) != 0) {
+        fprintf(stderr, "WSAStartup failed\n");
+        return 1;
+    }
+#endif
 
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        printf("WSAStartup failed.\n");
+    const char *host = "postman-echo.com";
+    const char *path = "/get";
+
+    // 解析域名
+    struct addrinfo hints, *res;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    int ret = getaddrinfo(host, "80", &hints, &res);
+    if (ret != 0 || !res) {
+        fprintf(stderr, "getaddrinfo failed: %s\n",
+#ifdef _WIN32
+            gai_strerrorA(ret)
+#else
+            gai_strerror(ret)
+#endif
+        );
+#ifdef _WIN32
+        WSACleanup();
+#endif
         return 1;
     }
 
-    sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    // 创建 socket
+    socket_t sock = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (sock == INVALID_SOCKET) {
-        printf("Socket creation failed: %d\n", WSAGetLastError());
+        perror("socket failed");
+#ifdef _WIN32
         WSACleanup();
+#endif
+        freeaddrinfo(res);
         return 1;
     }
 
-    serverAddr.sin_family = AF_INET;
-    serverAddr.sin_port = htons(12345);
-    inet_pton(AF_INET, "127.0.0.1", &serverAddr.sin_addr);
-
-    if (connect(sock, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
-        printf("Connect failed: %d\n", WSAGetLastError());
+    if (connect(sock, res->ai_addr, (int)res->ai_addrlen) == SOCKET_ERROR) {
+        perror("connect failed");
         closesocket(sock);
+#ifdef _WIN32
         WSACleanup();
+#endif
+        freeaddrinfo(res);
         return 1;
     }
+    freeaddrinfo(res);
+
+    // 设置非阻塞
+#ifdef _WIN32
+    u_long mode = 1;
+    ioctlsocket(sock, FIONBIO, &mode);
+#else
+    int flags = fcntl(sock, F_GETFL, 0);
+    fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+#endif
+
+    printf("Creating loop\n");
 
     loop_t *loop = loop_create(NULL);
-    //
-    // loop_add_timer(loop, 500, timer1_cb, "hello 500ms");
-    // loop_add_timer(loop, 1500, timer2_cb, "bye 1500ms");
-    // int timer3_count = 0;
-    // loop_add_timer(loop, 300, timer3_cb, &timer3_count);
+    printf("Created loop\n");
 
-    loop_register_handle(loop, (void*)sock, socket_cb, "&sock");
+    loop_register_handle(loop, (void*)(intptr_t)sock, socket_cb, NULL);
 
+
+    loop_add_timer(loop, 500, timer1_cb, "hello 500ms");
+    loop_add_timer(loop, 1500, timer2_cb, "bye 1500ms");
+    int timer3_count = 0;
+    loop_add_timer(loop, 300, timer3_cb, &timer3_count);
+
+    printf("Run\n");
     loop_run(loop);
+    printf("Ran\n");
 
-    printf("Main thread doing other work...\n");
-    for (int i = 0; i < 10; i++) {
-        Sleep(1000);
+    int i = 0;
+    for (; i < 10; i++) {
+        sleep_ms(1000);
         printf(".\n");
-        printf("%llu", loop_time_ms(loop));
-        if (i==1) {
-            char send_buf[] = "Hello, socket!\n";
-            if (send(sock, send_buf, sizeof(send_buf)-1, 0) < 0) {
-                printf("Send failed\n");
-            }
+        if (i == 2) {
+            char request[512];
+            snprintf(request, sizeof(request),
+                     "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n",
+                     path, host);
+            send(sock, request, (int)strlen(request), 0);
         }
     }
-    printf("\n");
 
     loop_destroy(loop);
+
     closesocket(sock);
+#ifdef _WIN32
     WSACleanup();
+#endif
     return 0;
 }

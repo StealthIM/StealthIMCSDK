@@ -32,4 +32,5 @@
 
 // 选择 Async 实现
 #define STEALTHIM_ASYNC_WIN32 1
-// #define STEALTHIM_ASYNC_POSIX 1
+// #define STEALTHIM_ASYNC_LINUX 1
+// #define STEALTHIM_ASYNC_BSD 1
