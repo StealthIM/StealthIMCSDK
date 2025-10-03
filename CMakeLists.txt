@@ -24,6 +24,7 @@ add_library(stealthim STATIC
         include/stealthim/hal/async/future.h
         include/stealthim/hal/async/task.h
         src/hal/async/task.c
+        src/hal/async/loop/linux_select.c
 )
 
 if(WIN32)

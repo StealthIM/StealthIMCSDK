@@ -1,11 +1,10 @@
 #include "stealthim/hal/async/loop.h"
 
-#ifdef STEALTHIM_ASYNC_LINUX_EPULL
+#ifdef STEALTHIM_ASYNC_LINUX_SELECT
 
-#include <sys/epoll.h>
-#include <sys/eventfd.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -35,7 +34,7 @@ typedef struct handle_req_s {
     char *buf;
     int buf_len;
     int closing;            // 标记正在注销（由任何线程设置）
-    struct handle_req_s *next_free; // 延迟释放链表
+    struct handle_req_s *next_free; // 延迟释放链表（主循环安全释放）
 } handle_req_t;
 
 typedef struct posted_event_s {
@@ -45,8 +44,8 @@ typedef struct posted_event_s {
 } posted_event_t;
 
 struct loop_s {
-    int epfd;               // epoll fd
-    int wakefd;             // eventfd 用来唤醒 / posted
+    int wake_r;             // pipe read end (用于唤醒 select)
+    int wake_w;             // pipe write end
     volatile long next_timer_id;
     int stop_flag;
     pthread_t thread;
@@ -56,7 +55,7 @@ struct loop_s {
     int heap_size;
     int heap_cap;
 
-    handle_req_t *handles;      // 链表（active handles）
+    handle_req_t *handles;      // 链表（active handles）      （受 lock 保护）
     handle_req_t *to_free;      // 由其他线程请求注销的 handle，主循环在安全时释放
 
     posted_event_t *posted_head;
@@ -151,9 +150,10 @@ void stealthim_loop_call_soon(loop_t *loop, loop_cb_t cb, void *userdata) {
     }
     pthread_mutex_unlock(&loop->lock);
 
-    // 唤醒 epoll（写 eventfd）
-    uint64_t one = 1;
-    ssize_t r = write(loop->wakefd, &one, sizeof(one));
+    // 唤醒 select（写 pipe）
+    ssize_t r;
+    uint8_t one = 1;
+    do { r = write(loop->wake_w, &one, 1); } while (r == -1 && errno == EINTR);
     (void)r;
 }
 
@@ -176,9 +176,7 @@ int stealthim_loop_register_handle(loop_t *loop, void *handle, loop_cb_t cb, voi
     if (!loop || !handle || !cb) return -1;
     int fd = (int)(intptr_t)handle;
 
-    // set non-blocking (required for EPOLLET)
     if (set_nonblocking(fd) != 0) {
-        // non-fatal? return error
         return -1;
     }
 
@@ -194,29 +192,16 @@ int stealthim_loop_register_handle(loop_t *loop, void *handle, loop_cb_t cb, voi
     req->next = NULL;
     req->next_free = NULL;
 
-    // insert to handles list
     pthread_mutex_lock(&loop->lock);
     req->next = loop->handles;
     loop->handles = req;
     pthread_mutex_unlock(&loop->lock);
 
-    // register to epoll
-    struct epoll_event ev;
-    memset(&ev, 0, sizeof(ev));
-    ev.data.ptr = req; // directly store pointer
-    ev.events = EPOLLIN | EPOLLET | EPOLLERR | EPOLLHUP;
-    if (epoll_ctl(loop->epfd, EPOLL_CTL_ADD, fd, &ev) != 0) {
-        // rollback
-        pthread_mutex_lock(&loop->lock);
-        handle_req_t **pp = &loop->handles;
-        while (*pp && *pp != req) pp = &(*pp)->next;
-        if (*pp) *pp = req->next;
-        pthread_mutex_unlock(&loop->lock);
-
-        free(req->buf);
-        free(req);
-        return -1;
-    }
+    // 唤醒主循环以更新 fdset（写 pipe）
+    ssize_t r;
+    uint8_t one = 1;
+    do { r = write(loop->wake_w, &one, 1); } while (r == -1 && errno == EINTR);
+    (void)r;
 
     return 0;
 }
@@ -248,13 +233,14 @@ int stealthim_loop_unregister_handle(loop_t *loop, void *handle) {
 
     pthread_mutex_unlock(&loop->lock);
 
-    // 从 epoll 中删除并关闭 fd（关闭后 epoll 可能产生事件，但 pointer 仍然有效直到主线程释放）
-    epoll_ctl(loop->epfd, EPOLL_CTL_DEL, fd, NULL);
+    // close fd 以确保 select 不再报告它
     close(fd);
 
     // 唤醒主循环以尽快回收
-    uint64_t one = 1;
-    write(loop->wakefd, &one, sizeof(one));
+    ssize_t r;
+    uint8_t one = 1;
+    do { r = write(loop->wake_w, &one, 1); } while (r == -1 && errno == EINTR);
+    (void)r;
 
     return 0;
 }
@@ -276,8 +262,10 @@ timer_id_t stealthim_loop_add_timer(loop_t *loop, uint64_t when_ms, loop_cb_t cb
     pthread_mutex_unlock(&loop->lock);
 
     // 唤醒主循环重新计算超时
-    uint64_t one = 1;
-    write(loop->wakefd, &one, sizeof(one));
+    ssize_t r;
+    uint8_t one = 1;
+    do { r = write(loop->wake_w, &one, 1); } while (r == -1 && errno == EINTR);
+    (void)r;
 
     return req->id;
 }
@@ -289,8 +277,10 @@ int stealthim_loop_cancel_timer(loop_t *loop, timer_id_t id) {
         if (loop->heap[i]->id == id) {
             loop->heap[i]->cancelled = 1;
             pthread_mutex_unlock(&loop->lock);
-            uint64_t one = 1;
-            write(loop->wakefd, &one, sizeof(one));
+            ssize_t r;
+            uint8_t one = 1;
+            do { r = write(loop->wake_w, &one, 1); } while (r == -1 && errno == EINTR);
+            (void)r;
             return 0;
         }
     }
@@ -333,15 +323,14 @@ static void free_pending_handles(loop_t *loop) {
     }
 }
 
-static void handle_epoll_handle_event(loop_t *loop, handle_req_t *req) {
+static void handle_select_handle_event(loop_t *loop, handle_req_t *req) {
     if (!req) return;
     if (req->closing) return; // 被标记为关闭，忽略
 
-    // 边缘触发：循环读取直到 EAGAIN
+    // level-triggered：尽量多读直到 EAGAIN
     for (;;) {
         ssize_t r = recv(req->fd, req->buf, (size_t)req->buf_len, 0);
         if (r > 0) {
-            // 构造 recv_data_t，注意这里是栈上临时结构，回调在 loop 线程内同步调用，所以安全
             recv_data_t data;
             data.userdata = req->userdata;
             data.data = req->buf;
@@ -350,7 +339,7 @@ static void handle_epoll_handle_event(loop_t *loop, handle_req_t *req) {
             // 继续循环读取
             continue;
         } else if (r == 0) {
-            // peer closed: unregister (this will mark closing and schedule for free)
+            // peer closed: unregister (这会标记 closing 并安排释放)
             stealthim_loop_unregister_handle(loop, (void *)(intptr_t)req->fd);
             break;
         } else {
@@ -369,28 +358,43 @@ static void handle_epoll_handle_event(loop_t *loop, handle_req_t *req) {
 // -------------------- loop 主循环 --------------------
 
 void loop_run_main(loop_t *loop) {
-    const int MAX_EVENTS = 32;
-    struct epoll_event events[MAX_EVENTS];
-
     while (!loop->stop_flag) {
-        // 计算下一个定时器到期时间
-        int timeout_int = -1; // -1 -> infinite
+        // 构建 fd_set
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        int maxfd = -1;
+
+        // always include wake read end
+        FD_SET(loop->wake_r, &readfds);
+        if (loop->wake_r > maxfd) maxfd = loop->wake_r;
+
+        // gather handles snapshot (under lock)
         pthread_mutex_lock(&loop->lock);
+        handle_req_t *h = loop->handles;
+        while (h) {
+            if (!h->closing) {
+                FD_SET(h->fd, &readfds);
+                if (h->fd > maxfd) maxfd = h->fd;
+            }
+            h = h->next;
+        }
+        // compute next timer timeout
+        int timeout_set = 0;
+        struct timeval tv;
         timer_req_t *top = heap_top(loop);
         if (top) {
             uint64_t now = now_ms();
             if (top->expire_ms <= now) {
-                // 触发它（pop）
+                // 直接触发（pop）
                 timer_req_t *t = heap_pop(loop);
-                // 如果被取消则丢弃
                 if (!t->cancelled) {
                     loop_cb_t cb = t->cb;
                     void *ud = t->userdata;
-                    // 在调用回调前释放锁以允许回调操作 loop（避免死锁）
+                    // 在调用回调前解锁
                     pthread_mutex_unlock(&loop->lock);
                     cb(loop, ud);
                     free(t);
-                    // loop back to recompute timers
+                    // loop back to recompute timers and fdset
                     continue;
                 } else {
                     free(t);
@@ -399,45 +403,59 @@ void loop_run_main(loop_t *loop) {
                 }
             } else {
                 uint64_t diff = top->expire_ms - now;
-                if (diff > (uint64_t)INT_MAX) timeout_int = INT_MAX;
-                else timeout_int = (int)diff;
+                if (diff > (uint64_t)INT_MAX) diff = INT_MAX;
+                tv.tv_sec = (long)(diff / 1000ULL);
+                tv.tv_usec = (long)((diff % 1000ULL) * 1000ULL);
+                timeout_set = 1;
             }
         }
         pthread_mutex_unlock(&loop->lock);
 
-        int n = epoll_wait(loop->epfd, events, MAX_EVENTS, timeout_int);
-        if (n < 0) {
+        int rv;
+        if (timeout_set) {
+            rv = select(maxfd + 1, &readfds, NULL, NULL, &tv);
+        } else {
+            rv = select(maxfd + 1, &readfds, NULL, NULL, NULL); // block indefinitely
+        }
+
+        if (rv < 0) {
             if (errno == EINTR) continue;
-            perror("epoll_wait");
+            perror("select");
             break;
-        } else if (n == 0) {
-            // timeout -> next loop iteration will handle timer
+        } else if (rv == 0) {
+            // timeout -> 下次循环会处理 timer（loop 顶部会处理）
             continue;
         }
 
-        for (int i = 0; i < n; i++) {
-            void *ptr = events[i].data.ptr;
-            if (!ptr) continue;
-
-            // wakefd is registered with data.ptr == loop pointer
-            if (ptr == (void *)loop) {
-                // 清空 eventfd (可能累计多个)
-                uint64_t cnt;
-                while (read(loop->wakefd, &cnt, sizeof(cnt)) > 0) { }
-                // 处理 posted 事件
-                process_posted(loop);
-                // 回收待释放的 handles
-                free_pending_handles(loop);
-            } else {
-                handle_req_t *req = (handle_req_t *)ptr;
-                // ensure pointer valid; handle_unregister marks closing and moves to to_free but doesn't free immediately,
-                // so pointer stays valid here until free_pending_handles runs.
-                // dispatch
-                handle_epoll_handle_event(loop, req);
-                // after handling, try to free pending handles (in case unregister called during callback)
-                free_pending_handles(loop);
-            }
+        // 处理 wake pipe
+        if (FD_ISSET(loop->wake_r, &readfds)) {
+            // 清空 pipe（可能写入多个字节）
+            uint8_t buf[64];
+            ssize_t r;
+            do { r = read(loop->wake_r, buf, sizeof(buf)); } while (r > 0 || (r == -1 && errno == EINTR));
+            // 处理 posted 事件 & 回收
+            process_posted(loop);
+            free_pending_handles(loop);
         }
+
+        // 处理 socket events: 遍历 handles list，检查哪几个 fd 可读
+        pthread_mutex_lock(&loop->lock);
+        handle_req_t *p = loop->handles;
+        while (p) {
+            handle_req_t *next = p->next; // 保存下一个指针以免 p 被移除
+            if (!p->closing && FD_ISSET(p->fd, &readfds)) {
+                // 调用时解锁以便回调可以执行 loop 操作
+                pthread_mutex_unlock(&loop->lock);
+                handle_select_handle_event(loop, p);
+                pthread_mutex_lock(&loop->lock);
+                // 可能在回调中注销了某些 handles，因此不要相信 p 的 next 完整性 —— 我们使用 next 保存
+            }
+            p = next;
+        }
+        pthread_mutex_unlock(&loop->lock);
+
+        // 尝试回收待释放资源
+        free_pending_handles(loop);
     }
 
     // loop stop: cleanup pending frees
@@ -455,15 +473,21 @@ loop_t *stealthim_loop_create() {
     loop_t *loop = calloc(1, sizeof(loop_t));
     if (!loop) return NULL;
 
-    loop->epfd = epoll_create1(0);
-    if (loop->epfd < 0) { free(loop); return NULL; }
+    int pipefd[2];
+    if (pipe(pipefd) != 0) { free(loop); return NULL; }
+    // set non-blocking read end to avoid blocking on read
+    fcntl(pipefd[0], F_SETFL, fcntl(pipefd[0], F_GETFL, 0) | O_NONBLOCK);
+    // optionally set CLOEXEC
+#ifdef F_SETFD
+    fcntl(pipefd[0], F_SETFD, FD_CLOEXEC);
+    fcntl(pipefd[1], F_SETFD, FD_CLOEXEC);
+#endif
 
-    loop->wakefd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
-    if (loop->wakefd < 0) { close(loop->epfd); free(loop); return NULL; }
+    loop->wake_r = pipefd[0];
+    loop->wake_w = pipefd[1];
 
     if (pthread_mutex_init(&loop->lock, NULL) != 0) {
-        close(loop->wakefd);
-        close(loop->epfd);
+        close(loop->wake_r); close(loop->wake_w);
         free(loop);
         return NULL;
     }
@@ -476,19 +500,6 @@ loop_t *stealthim_loop_create() {
     loop->to_free = NULL;
     loop->posted_head = loop->posted_tail = NULL;
 
-    // 将 wakefd 注册到 epoll。用 loop 指针作为 data.ptr 以便区分
-    struct epoll_event ev;
-    memset(&ev, 0, sizeof(ev));
-    ev.events = EPOLLIN;
-    ev.data.ptr = (void *)loop;
-    if (epoll_ctl(loop->epfd, EPOLL_CTL_ADD, loop->wakefd, &ev) != 0) {
-        pthread_mutex_destroy(&loop->lock);
-        close(loop->wakefd);
-        close(loop->epfd);
-        free(loop);
-        return NULL;
-    }
-
     return loop;
 }
 
@@ -500,9 +511,11 @@ void stealthim_loop_run(loop_t *loop) {
 void stealthim_loop_stop(loop_t *loop) {
     if (!loop) return;
     loop->stop_flag = 1;
-    // 唤醒 epoll_wait
-    uint64_t one = 1;
-    write(loop->wakefd, &one, sizeof(one));
+    // 唤醒 select
+    ssize_t r;
+    uint8_t one = 1;
+    do { r = write(loop->wake_w, &one, 1); } while (r == -1 && errno == EINTR);
+    (void)r;
     if (loop->thread) {
         pthread_join(loop->thread, NULL);
         loop->thread = 0;
@@ -513,10 +526,9 @@ void stealthim_loop_destroy(loop_t *loop) {
     if (!loop) return;
     stealthim_loop_stop(loop);
 
-    // close epoll & wakefd
-    epoll_ctl(loop->epfd, EPOLL_CTL_DEL, loop->wakefd, NULL);
-    close(loop->wakefd);
-    close(loop->epfd);
+    // close wake pipe
+    close(loop->wake_r);
+    close(loop->wake_w);
 
     // 清空堆
     pthread_mutex_lock(&loop->lock);
@@ -531,8 +543,6 @@ void stealthim_loop_destroy(loop_t *loop) {
     handle_req_t *h = loop->handles;
     while (h) {
         handle_req_t *next = h->next;
-        // remove from epoll if any
-        epoll_ctl(loop->epfd, EPOLL_CTL_DEL, h->fd, NULL);
         close(h->fd);
         free(h->buf);
         free(h);
