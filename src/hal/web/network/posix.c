@@ -1,5 +1,5 @@
-#include "stealthim/hal/network.h"
-#include "stealthim/hal/tls.h"
+#include "stealthim/hal/net/network.h"
+#include "stealthim/hal/net/tls.h"
 #include "stealthim/hal/logging.h"
 
 #ifdef STEALTHIM_NETWORK_POSIX

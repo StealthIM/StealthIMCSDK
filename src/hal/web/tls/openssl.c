@@ -1,4 +1,4 @@
-#include "stealthim/hal/tls.h"
+#include "stealthim/hal/net/tls.h"
 
 #ifdef STEALTHIM_TLS_OPENSSL
 

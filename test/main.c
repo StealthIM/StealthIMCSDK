@@ -4,6 +4,7 @@
 int test_http();
 int test_ws();
 int test_loop();
+int test_future();
 
 int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -14,6 +15,7 @@ int main(int argc, char** argv) {
     if (strcmp(argv[1], "http") == 0) return test_http();
     if (strcmp(argv[1], "ws") == 0) return test_ws();
     if (strcmp(argv[1], "loop") == 0) return test_loop();
+    if (strcmp(argv[1], "future") == 0) return test_future();
 
     printf("Unknown test: %s\n", argv[1]);
     return 1;

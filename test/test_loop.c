@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "tools.h"
+
 #ifdef _WIN32
   #define WIN32_LEAN_AND_MEAN
   #include <windows.h>
@@ -31,14 +33,10 @@
   #define closesocket close
 #endif
 
-#include "stealthim/hal/loop.h"
+#include "../include/stealthim/hal/async/loop.h"
 
 static void socket_cb(loop_t *loop, void *userdata) {
     recv_data_t *data = (recv_data_t*)userdata;
-    if (data->len == 0) {
-        printf("Connection closed by peer\n");
-        return;
-    }
 
     data->data[data->len] = '\0'; // 确保字符串结束
 
@@ -60,22 +58,12 @@ static void timer3_cb(loop_t *loop, void *userdata) {
     if (count < 4) {
         printf("Timer3 fired: %d, rescheduling...\n", count);
         (*(int*)userdata)++;
-        loop_add_timer(loop, 300, timer3_cb, userdata);
+        stealthim_loop_add_timer(loop, 300, timer3_cb, userdata);
     } else {
         printf("Timer3 fired: %d, done.\n", count);
     }
 }
 
-static void sleep_ms(unsigned int ms) {
-#ifdef _WIN32
-    Sleep(ms);
-#else
-    struct timespec ts;
-    ts.tv_sec = ms/1000;
-    ts.tv_nsec = (ms%1000)*1000000;
-    nanosleep(&ts, NULL);
-#endif
-}
 
 int test_loop() {
 #ifdef _WIN32
@@ -142,19 +130,19 @@ int test_loop() {
 
     printf("Creating loop\n");
 
-    loop_t *loop = loop_create(NULL);
+    loop_t *loop = stealthim_loop_create();
     printf("Created loop\n");
 
-    loop_register_handle(loop, (void*)(intptr_t)sock, socket_cb, NULL);
+    stealthim_loop_register_handle(loop, (void*)(intptr_t)sock, socket_cb, NULL);
 
 
-    loop_add_timer(loop, 500, timer1_cb, "hello 500ms");
-    loop_add_timer(loop, 1500, timer2_cb, "bye 1500ms");
+    stealthim_loop_add_timer(loop, 500, timer1_cb, "hello 500ms");
+    stealthim_loop_add_timer(loop, 1500, timer2_cb, "bye 1500ms");
     int timer3_count = 0;
-    loop_add_timer(loop, 300, timer3_cb, &timer3_count);
+    stealthim_loop_add_timer(loop, 300, timer3_cb, &timer3_count);
 
     printf("Run\n");
-    loop_run(loop);
+    stealthim_loop_run(loop);
     printf("Ran\n");
 
     int i = 0;
@@ -170,7 +158,7 @@ int test_loop() {
         }
     }
 
-    loop_destroy(loop);
+    stealthim_loop_destroy(loop);
 
     closesocket(sock);
 #ifdef _WIN32
