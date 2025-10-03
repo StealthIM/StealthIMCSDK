@@ -1,6 +1,8 @@
 #pragma once
 #include <stdlib.h>
 
+#include "loop.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -14,7 +16,7 @@ typedef enum {
 typedef struct future_s future_t;
 typedef void (*future_cb_t)(future_t *fut, void *userdata);
 
-future_t *future_create();
+future_t *future_create(loop_t *loop);
 void future_destroy(future_t *fut);
 
 void future_set_result(future_t *fut, void *result);

@@ -1,8 +1,8 @@
 #pragma once
 
 // 选择网络实现
-#define STEALTHIM_NETWORK_WIN32 1
-// #define STEALTHIM_NETWORK_POSIX 1
+// #define STEALTHIM_NETWORK_WIN32 1
+#define STEALTHIM_NETWORK_POSIX 1
 // #define STEALTHIM_NETWORK_LWIP 1
 
 
@@ -26,11 +26,11 @@
 // #define STEALTHIM_TLS_MBEDTLS 1
 
 // 选择 WebSocket 实现
-#define STEALTHIM_WS_WIN32 1
-// #define STEALTHIM_WS_POSIX 1
+// #define STEALTHIM_WS_WIN32 1
+#define STEALTHIM_WS_POSIX 1
 // #define STEALTHIM_WS_NONE 1
 
 // 选择 Async 实现
-#define STEALTHIM_ASYNC_WIN32 1
-// #define STEALTHIM_ASYNC_LINUX 1
+// #define STEALTHIM_ASYNC_WIN32 1
+#define STEALTHIM_ASYNC_LINUX 1
 // #define STEALTHIM_ASYNC_BSD 1

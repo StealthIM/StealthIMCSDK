@@ -22,6 +22,8 @@ add_library(stealthim STATIC
         src/hal/async/loop/linux.c
         src/hal/async/future.c
         include/stealthim/hal/async/future.h
+        include/stealthim/hal/async/task.h
+        src/hal/async/task.c
 )
 
 if(WIN32)
@@ -39,6 +41,7 @@ add_executable(stealthim_tests
         test/test_loop.c
         test/test_future.c
         test/tools.h
+        test/test_task.c
 )
 target_link_libraries(stealthim_tests stealthim)
 
@@ -46,3 +49,4 @@ add_test(NAME test_http COMMAND stealthim_tests http)
 add_test(NAME test_ws COMMAND stealthim_tests ws)
 add_test(NAME test_loop COMMAND stealthim_tests loop)
 add_test(NAME test_future COMMAND stealthim_tests future)
+add_test(NAME test_task COMMAND stealthim_tests task)

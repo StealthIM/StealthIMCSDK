@@ -2,7 +2,7 @@
 
 #ifdef STEALTHIM_WS_POSIX
 
-#include "stealthim/hal/tls.h"
+#include "stealthim/hal/net/tls.h"
 
 #include <sys/types.h>
 #include <sys/socket.h>

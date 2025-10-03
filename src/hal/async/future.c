@@ -1,5 +1,7 @@
 #include "stealthim/hal/async/future.h"
 
+#include "stealthim/hal/async/loop.h"
+
 typedef struct future_cb_node_s {
     future_cb_t cb;
     void *userdata;
@@ -7,6 +9,7 @@ typedef struct future_cb_node_s {
 } future_cb_node_t;
 
 struct future_s {
+    loop_t *loop;
     future_state_t state;
     void *result;
     int error;
@@ -14,17 +17,34 @@ struct future_s {
     future_cb_node_t *callbacks;
 };
 
+typedef struct callback_data_s {
+    future_cb_t cb;
+    future_t *future;
+    void *userdata;
+} callback_data_t;
+
+static void real_invoke_callback(loop_t *loop, void *data) {
+    callback_data_t *callback = data;
+    callback->cb(callback->future, callback->userdata);
+    free(data);
+}
+
 static void future_invoke_callbacks(future_t *fut) {
     future_cb_node_t *node = fut->callbacks;
     while (node) {
-        node->cb(fut, node->userdata);
+        callback_data_t *data = calloc(1, sizeof(callback_data_t));
+        data->userdata = node->userdata;
+        data->future = fut;
+        data->cb = node->cb;
+        stealthim_loop_call_soon(fut->loop, real_invoke_callback, data);
         node = node->next;
     }
 }
 
-future_t *future_create() {
+future_t *future_create(loop_t *loop) {
     future_t *f = (future_t*)calloc(1, sizeof(future_t));
     f->state = FUTURE_PENDING;
+    f->loop = loop;
     return f;
 }
 
