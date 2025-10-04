@@ -3,45 +3,52 @@
 #include "tools.h"
 #include "stealthim/hal/async/task.h"
 
-int sub_async(task_t *task, task_ctx_t *ctx) {
-    task_local_var();
-    task_enter(task, ctx);
+int sub_async(stealthim_task_t *task, stealthim_task_ctx_t *ctx) {
+    stealthim_task_local_var();
+    stealthim_task_enter();
     printf("3\n");
-    task_return(4);
-    task_end();
+    stealthim_task_return(4);
+    stealthim_task_end();
 }
 
 // 打印并执行下一步
-int task_callback(task_t *task, task_ctx_t *ctx) {
-    task_local_var(int a);
-    task_enter(task, ctx);
+int task_callback(stealthim_task_t *task, stealthim_task_ctx_t *ctx) {
+    stealthim_task_local_var(int a; int b);
+    stealthim_task_enter();
     printf("1\n");
-    task_await_future(async_sleep(500));
+    stealthim_task_await_future(async_sleep(500));
     printf("2\n");
-    task_await_task(task_create(task_loop(task), sub_async, NULL));
-    task_var(a) = task_await_res(int);
-    task_await_future(async_sleep(500));
-    printf("%d\n", task_var(a));
-    task_return(5);
-    task_end();
+    stealthim_task_await_task(sub_async, NULL);
+    printf(":\n");
+    stealthim_task_var(b) = stealthim_task_await_res(int);
+    stealthim_task_await_future(async_sleep(500));
+    printf("%d\n", stealthim_task_var(b));
+
+    for (stealthim_task_var(a)=0; stealthim_task_var(a)<5; stealthim_task_var(a)++) {
+        stealthim_task_await_future(async_sleep(500));
+        printf("loop %d\n", stealthim_task_var(a));
+    }
+
+    stealthim_task_return(6);
+    stealthim_task_end();
 }
 
 int test_task() {
     loop_t *loop = stealthim_loop_create();
 
     // 创建并执行一个任务
-    task_t *task = task_create(loop, task_callback, NULL);
-    task_run(task);
+    stealthim_task_t *task = stealthim_task_create(loop, task_callback, NULL);
+    stealthim_task_run(task);
 
     stealthim_loop_run(loop);
 
-    sleep_ms(2000);
+    sleep_ms(5000);
 
-    if (task_finished(task)) {
-        printf("Result: %d\n", (int)(intptr_t)task_result(task));
+    if (stealthim_task_finished(task)) {
+        printf("Result: %d\n", (int)(intptr_t)stealthim_task_result(task));
     }
 
-    task_destroy(task);
+    stealthim_task_destroy(task);
 
     stealthim_loop_destroy(loop);
     return 0;

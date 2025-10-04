@@ -1,27 +1,44 @@
-#include "stealthim/hal/net/network.h"
-#include "stealthim/hal/net/tls.h"
+#include "stealthim/hal/net/sync/network.h"
+#include "../../../../../include/stealthim/hal/net/tls.h"
 #include "stealthim/hal/logging.h"
 
-#ifdef STEALTHIM_NETWORK_POSIX
+#ifdef STEALTHIM_NETWORK_WIN32
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <stdlib.h>
 #include <ctype.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netdb.h>
 
 #include "stealthim/hal/tools.h"
 
+#pragma comment(lib, "ws2_32.lib")
+
 stealthim_status_t stealthim_network_init() {
-    // POSIX 不需要初始化 socket
-    return STEALTHIM_OK;
+    WSADATA wsa;
+    return (WSAStartup(MAKEWORD(2,2), &wsa) == 0) ? STEALTHIM_OK : STEALTHIM_ERR;
 }
 
 void stealthim_network_cleanup() {
-    // POSIX 不需要清理
+    WSACleanup();
+}
+
+
+// 解析 Content-Length
+static int parse_content_length(const char* headers) {
+    const char* p = strcasestr(headers, "Content-Length:");
+    if (p) {
+        char* endptr;
+        long val = strtol(p + 15, &endptr, 10);
+        return (endptr != p + 15) ? (int)val : -1;
+    }
+    return -1;
+}
+
+// 检查 chunked
+static int is_chunked(const char* headers) {
+    return (strcasestr(headers, "Transfer-Encoding: chunked") != NULL);
 }
 
 // send/recv 回调统一接口
@@ -30,7 +47,7 @@ typedef int (*recv_func_t)(void* ctx, char* buf, int maxlen);
 
 // socket 分别实现
 static int send_all_socket(void* ctx, const char* buf, int len) {
-    int sock = *(int*)ctx;
+    SOCKET sock = *(SOCKET*)ctx;
     int sent = 0;
     while (sent < len) {
         int n = send(sock, buf + sent, len - sent, 0);
@@ -41,7 +58,7 @@ static int send_all_socket(void* ctx, const char* buf, int len) {
 }
 
 static int recv_all_socket(void* ctx, char* buf, int maxlen) {
-    int sock = *(int*)ctx;
+    SOCKET sock = *(SOCKET*)ctx;
     return recv(sock, buf, maxlen, 0);
 }
 
@@ -60,22 +77,6 @@ static int send_all_tls(void* ctx, const char* buf, int len) {
 static int recv_all_tls(void* ctx, char* buf, int maxlen) {
     stealthim_tls_ctx_t* tls = (stealthim_tls_ctx_t*)ctx;
     return stealthim_tls_recv(tls, buf, maxlen);
-}
-
-// 解析 Content-Length
-static int parse_content_length(const char* headers) {
-    const char* p = strcasestr(headers, "Content-Length:");
-    if (p) {
-        char* endptr;
-        long val = strtol(p + 15, &endptr, 10);
-        return (endptr != p + 15) ? (int)val : -1;
-    }
-    return -1;
-}
-
-// 检查 chunked
-static int is_chunked(const char* headers) {
-    return (strcasestr(headers, "Transfer-Encoding: chunked") != NULL);
 }
 
 // 接收 HTTP 响应头
@@ -112,7 +113,7 @@ static int build_http_request(const char* method, const char* host, const char* 
 }
 
 // 建立连接（socket 或 TLS）
-static int establish_connection(const char* host, int port, int use_tls, int* out_sock, stealthim_tls_ctx_t** out_tls) {
+static int establish_connection(const char* host, int port, int use_tls, SOCKET* out_sock, stealthim_tls_ctx_t** out_tls) {
     if (use_tls) {
         stealthim_tls_ctx_t* tls_ctx = stealthim_tls_create();
         if (!tls_ctx) return -1;
@@ -121,39 +122,28 @@ static int establish_connection(const char* host, int port, int use_tls, int* ou
             return -1;
         }
         *out_tls = tls_ctx;
-        *out_sock = -1;
+        *out_sock = INVALID_SOCKET;
         return 0;
     } else {
-        struct addrinfo hints, *res;
-        char port_str[6];
-        snprintf(port_str, sizeof(port_str), "%d", port);
-
-        memset(&hints, 0, sizeof(hints));
-        hints.ai_family = AF_UNSPEC;
-        hints.ai_socktype = SOCK_STREAM;
-
-        if (getaddrinfo(host, port_str, &hints, &res) != 0) return -1;
-
-        int sock = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-        if (sock < 0) {
-            freeaddrinfo(res);
+        struct hostent* he = gethostbyname(host);
+        if (!he) return -1;
+        SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
+        if (sock == INVALID_SOCKET) return -1;
+        struct sockaddr_in server;
+        server.sin_family = AF_INET;
+        server.sin_port = htons(port);
+        memcpy(&server.sin_addr, he->h_addr, he->h_length);
+        if (connect(sock, (struct sockaddr*)&server, sizeof(server)) < 0) {
+            closesocket(sock);
             return -1;
         }
-
-        if (connect(sock, res->ai_addr, res->ai_addrlen) != 0) {
-            close(sock);
-            freeaddrinfo(res);
-            return -1;
-        }
-
-        freeaddrinfo(res);
         *out_sock = sock;
         *out_tls = NULL;
         return 0;
     }
 }
 
-// 发送数据
+// 发送数据（请求头和body）
 static int send_http_data(send_func_t send_func, void* ctx, const char* request, int req_len, const char* body) {
     if (send_func(ctx, request, req_len) < 0) return -1;
     if (body && send_func(ctx, body, strlen(body)) < 0) return -1;
@@ -161,13 +151,13 @@ static int send_http_data(send_func_t send_func, void* ctx, const char* request,
 }
 
 // 资源清理
-static void cleanup_connection(int use_tls, int sock, stealthim_tls_ctx_t* tls_ctx) {
+static void cleanup_connection(int use_tls, SOCKET sock, stealthim_tls_ctx_t* tls_ctx) {
     if (use_tls && tls_ctx) {
         stealthim_tls_close(tls_ctx);
         stealthim_tls_destroy(tls_ctx);
     }
-    if (!use_tls && sock >= 0) {
-        close(sock);
+    if (!use_tls && sock != INVALID_SOCKET) {
+        closesocket(sock);
     }
 }
 
@@ -176,7 +166,6 @@ static int receive_http_body(char* response, int maxlen, int header_len, int con
     char* body_ptr = response + header_len;
     int body_bytes = strlen(body_ptr);
     int total = header_len + body_bytes;
-
     if (content_length > 0) {
         while (body_bytes < content_length) {
             int recv_size = recv_func(ctx, body_ptr + body_bytes, maxlen - header_len - body_bytes - 1);
@@ -206,7 +195,6 @@ static int receive_http_body(char* response, int maxlen, int header_len, int con
     return total;
 }
 
-// 主函数重构
 stealthim_status_t stealthim_http_request(
     const char* method,
     const char* host,
@@ -218,7 +206,7 @@ stealthim_status_t stealthim_http_request(
     int maxlen
 ) {
     int use_tls = (port == 443);
-    int sock = -1;
+    SOCKET sock = INVALID_SOCKET;
     stealthim_tls_ctx_t* tls_ctx = NULL;
     send_func_t send_func = NULL;
     recv_func_t recv_func = NULL;
@@ -226,14 +214,13 @@ stealthim_status_t stealthim_http_request(
     int total = 0;
     int ret = STEALTHIM_ERR;
 
-    stealthim_log_debug("HTTP Request: %s %s:%d%s", method, host, port, path);
-
+    // 构造请求
     char request[2048];
     int req_len = build_http_request(method, host, path, headers, body, request, sizeof(request));
     if (req_len <= 0) return STEALTHIM_ERR;
 
+    // 建立连接
     if (establish_connection(host, port, use_tls, &sock, &tls_ctx) != 0) return STEALTHIM_ERR;
-
     if (use_tls) {
         send_func = send_all_tls;
         recv_func = recv_all_tls;
@@ -244,15 +231,17 @@ stealthim_status_t stealthim_http_request(
         ctx = &sock;
     }
 
+    // 发送请求
     if (send_http_data(send_func, ctx, request, req_len, body) < 0) goto cleanup;
 
+    // 接收响应头
     int header_len = 0;
     total = receive_response(response, maxlen, &header_len, recv_func, ctx);
     if (total < 0) goto cleanup;
 
+    // 解析响应体
     int content_length = parse_content_length(response);
     int chunked = is_chunked(response);
-
     total = receive_http_body(response, maxlen, header_len, content_length, chunked, recv_func, ctx);
     if (total < 0) goto cleanup;
 

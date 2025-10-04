@@ -206,7 +206,7 @@ int stealthim_loop_register_handle(loop_t *loop, void *handle, loop_cb_t cb, voi
     return 0;
 }
 
-int stealthim_loop_unregister_handle(loop_t *loop, void *handle) {
+int stealthim_loop_unregister_handle(loop_t *loop, void *handle, bool close_socket) {
     if (!loop || !handle) return -1;
     int fd = (int)(intptr_t)handle;
 
@@ -234,7 +234,7 @@ int stealthim_loop_unregister_handle(loop_t *loop, void *handle) {
     pthread_mutex_unlock(&loop->lock);
 
     // close fd 以确保 select 不再报告它
-    close(fd);
+    if (close_socket) close(fd);
 
     // 唤醒主循环以尽快回收
     ssize_t r;
@@ -340,7 +340,7 @@ static void handle_select_handle_event(loop_t *loop, handle_req_t *req) {
             continue;
         } else if (r == 0) {
             // peer closed: unregister (这会标记 closing 并安排释放)
-            stealthim_loop_unregister_handle(loop, (void *)(intptr_t)req->fd);
+            stealthim_loop_unregister_handle(loop, (void *)(intptr_t)req->fd, false);
             break;
         } else {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -348,7 +348,7 @@ static void handle_select_handle_event(loop_t *loop, handle_req_t *req) {
                 break;
             } else {
                 // error: unregister
-                stealthim_loop_unregister_handle(loop, (void *)(intptr_t)req->fd);
+                stealthim_loop_unregister_handle(loop, (void *)(intptr_t)req->fd, true);
                 break;
             }
         }

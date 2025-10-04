@@ -203,7 +203,7 @@ int stealthim_loop_register_handle(loop_t *loop, void *handle, loop_cb_t cb, voi
     return 0;
 }
 
-int stealthim_loop_unregister_handle(loop_t *loop, void *handle) {
+int stealthim_loop_unregister_handle(loop_t *loop, void *handle, bool close_socket) {
     SOCKET s = (SOCKET)handle;
     EnterCriticalSection(&loop->lock);
     handle_req_t **p = &loop->handles;
@@ -214,7 +214,7 @@ int stealthim_loop_unregister_handle(loop_t *loop, void *handle) {
         LeaveCriticalSection(&loop->lock);
 
         CancelIoEx((HANDLE)s, NULL);
-        closesocket(s);
+        if (close_socket) closesocket(s);
         free(req->buf);
         free(req);
         return 0;
@@ -273,7 +273,7 @@ void loop_run_main(loop_t *loop) {
                 .len = bytes
             };
             if (bytes == 0) {
-                stealthim_loop_unregister_handle(loop, (void*)ev->sock.handle->sock);
+                stealthim_loop_unregister_handle(loop, (void*)ev->sock.handle->sock, true);
                 break;
             }
             ev->sock.cb(loop, &data);
@@ -290,7 +290,7 @@ void loop_run_main(loop_t *loop) {
                               &ev->ov,
                               NULL);
             if (ret == SOCKET_ERROR && WSAGetLastError() != WSA_IO_PENDING) {
-                stealthim_loop_unregister_handle(loop, (void*)ev->sock.handle->sock);
+                stealthim_loop_unregister_handle(loop, (void*)ev->sock.handle->sock, false);
                 break;
             }
             break;

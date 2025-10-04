@@ -1,4 +1,4 @@
-#include "stealthim/hal/net/websocket.h"
+#include "stealthim/hal/net/sync/websocket.h"
 #ifdef STEALTHIM_WS_NONE
 
 #include <stdlib.h>

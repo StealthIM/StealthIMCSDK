@@ -221,7 +221,7 @@ int stealthim_loop_register_handle(loop_t *loop, void *handle, loop_cb_t cb, voi
     return 0;
 }
 
-int stealthim_loop_unregister_handle(loop_t *loop, void *handle) {
+int stealthim_loop_unregister_handle(loop_t *loop, void *handle, bool close_socket) {
     if (!loop || !handle) return -1;
     int fd = (int)(intptr_t)handle;
 
@@ -250,7 +250,7 @@ int stealthim_loop_unregister_handle(loop_t *loop, void *handle) {
 
     // 从 epoll 中删除并关闭 fd（关闭后 epoll 可能产生事件，但 pointer 仍然有效直到主线程释放）
     epoll_ctl(loop->epfd, EPOLL_CTL_DEL, fd, NULL);
-    close(fd);
+    if (close_socket) close(fd);
 
     // 唤醒主循环以尽快回收
     uint64_t one = 1;
@@ -351,7 +351,7 @@ static void handle_epoll_handle_event(loop_t *loop, handle_req_t *req) {
             continue;
         } else if (r == 0) {
             // peer closed: unregister (this will mark closing and schedule for free)
-            stealthim_loop_unregister_handle(loop, (void *)(intptr_t)req->fd);
+            stealthim_loop_unregister_handle(loop, (void *)(intptr_t)req->fd, false);
             break;
         } else {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -359,7 +359,7 @@ static void handle_epoll_handle_event(loop_t *loop, handle_req_t *req) {
                 break;
             } else {
                 // error: unregister
-                stealthim_loop_unregister_handle(loop, (void *)(intptr_t)req->fd);
+                stealthim_loop_unregister_handle(loop, (void *)(intptr_t)req->fd, true);
                 break;
             }
         }

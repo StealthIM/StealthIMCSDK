@@ -6,6 +6,7 @@ extern "C" {
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
 #include <stealthim/config.h>
 
 typedef struct loop_s loop_t;
@@ -29,7 +30,7 @@ void stealthim_loop_stop(loop_t *loop);
 // register a HANDLE/SOCKET with the loop; userdata returned when completion arrives
 // note: on Windows, registering a SOCKET/FILE handle just associates it with IOCP
 int stealthim_loop_register_handle(loop_t *loop, void *handle, loop_cb_t cb, void *userdata);
-int stealthim_loop_unregister_handle(loop_t *loop, void *handle);
+int stealthim_loop_unregister_handle(loop_t *loop, void *handle, bool close_socket);
 
 // timers
 typedef int32_t timer_id_t;

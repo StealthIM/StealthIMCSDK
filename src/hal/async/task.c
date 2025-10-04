@@ -2,70 +2,84 @@
 #include <stdlib.h>
 #include <stealthim/hal/async/task.h>
 
-task_t *task_create(loop_t *loop, task_cb_t cb, void *userdata) {
-    task_t *t = (task_t*)calloc(1, sizeof(task_t));
+#include "stealthim/hal/logging.h"
+
+stealthim_task_t *_stealthim_task_create(loop_t *loop, task_cb_t cb, void *userdata, bool auto_destroy) {
+    stealthim_task_t *t = (stealthim_task_t*)calloc(1, sizeof(stealthim_task_t));
     if (!t) return NULL;
-    t->future = future_create(loop);
+    t->future = stealthim_future_create(loop);
     if (!t->future) {
         free(t);
         return NULL;
     }
+    if (auto_destroy) stealthim_future_add_done_callback(t->future, stealthim_task_destroy_fut, t);
     t->loop = loop;
     t->cb = cb;
-    task_ctx_t *ctx = (task_ctx_t*)malloc(sizeof(task_ctx_t));
+    stealthim_task_ctx_t *ctx = calloc(1, sizeof(stealthim_task_ctx_t));
     if (!ctx) {
-        future_destroy(t->future);
+        stealthim_future_destroy(t->future);
         free(t);
         return NULL;
     }
     ctx->userdata = userdata;
-    ctx->state = 0;
-    ctx->waiting_for = NULL;
-    ctx->local_data = NULL;
     t->ctx = ctx;
     return t;
 }
 
-void task_destroy(task_t *task) {
+stealthim_task_t *stealthim_task_create(loop_t *loop, task_cb_t cb, void *userdata) {
+    return _stealthim_task_create(loop, cb, userdata, false);
+}
+stealthim_task_t *stealthim_task_create_in_task(loop_t *loop, task_cb_t cb, void *userdata) {
+    return _stealthim_task_create(loop, cb, userdata, true);
+}
+
+void stealthim_task_destroy(stealthim_task_t *task) {
     if (!task) return;
-    future_destroy(task->future);
+    if (!task->ctx->finished) stealthim_future_destroy(task->future);
     free(task->ctx->local_data);
     free(task->ctx);
     free(task);
 }
 
+void stealthim_task_destroy_loop(loop_t *loop, void *task) {
+    stealthim_task_destroy(task);
+}
+
+void stealthim_task_destroy_fut(stealthim_future_t *fut, void *task) {
+    stealthim_loop_call_soon(fut->loop, stealthim_task_destroy_loop, task);
+}
+
 void task_run_cb(loop_t *loop, void *userdata) {
-    task_t *task = (task_t*)userdata;
+    stealthim_task_t *task = (stealthim_task_t*)userdata;
     if (!task || !task->future) return;
 
     if (task->ctx->waiting_for != NULL) {
-        task->ctx->future_result = future_result(task->ctx->waiting_for);
-        task->ctx->waiting_for = NULL;
+        task->ctx->future_result = stealthim_future_result(task->ctx->waiting_for);
     }
 
     int ret = task->cb(task, task->ctx);
     if (ret == TASK_ENDED) {
-        future_set_result(task->future, task->ctx->result);
+        stealthim_future_done(task->future, task->ctx->result);
         task->ctx->finished = true;
     } else if (ret == TASK_PENDING) {
-        future_add_done_callback(task->ctx->waiting_for, (future_cb_t)task_run_cb, task);
+        stealthim_future_add_done_callback(task->ctx->waiting_for, (stealthim_future_cb_t)task_run_cb, task);
     }
 }
 
-void task_run(task_t *task) {
+void stealthim_task_run(stealthim_task_t *task) {
     if (!task || !task->loop) return;
     stealthim_loop_call_soon(task->loop, task_run_cb, task);
 }
 
 void sleep_cb(loop_t *loop, void *userdata) {
-    future_t *fut = (future_t*)userdata;
+    stealthim_future_t *fut = (stealthim_future_t*)userdata;
     if (fut) {
-        future_set_result(fut, NULL);
+        stealthim_future_done(fut, NULL);
     }
 }
 
-future_t *_async_sleep(loop_t *loop, uint64_t ms) {
-    future_t *fut = future_create(loop);
+stealthim_future_t *_async_sleep(loop_t *loop, uint64_t ms) {
+    stealthim_future_t *fut = stealthim_future_create(loop);
     if (!fut) return NULL;
     stealthim_loop_add_timer(loop, ms, sleep_cb, fut);
     return fut;

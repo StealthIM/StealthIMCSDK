@@ -1,4 +1,4 @@
-#include "stealthim/hal/net/tls.h"
+#include "../../../../include/stealthim/hal/net/tls.h"
 
 #ifdef STEALTHIM_TLS_OPENSSL
 
@@ -10,6 +10,8 @@
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+
+#include "stealthim/hal/async/task.h"
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -109,6 +111,88 @@ int stealthim_tls_connect(stealthim_tls_ctx_t* ctx, const char* host, int port) 
     return 0;
 }
 
+// #ifdef _WIN32
+// int set_nonblocking(SOCKET sock) {
+//     u_long mode = 1;
+//     return ioctlsocket(sock, FIONBIO, &mode);
+// }
+// #else
+// int set_nonblocking(int sock) {
+//     int flags = fcntl(sock, F_GETFL, 0);
+//     if (flags == -1) return -1;
+//     return fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+// }
+// #endif
+
+int _stealthim_tls_connect_async(stealthim_task_t *task, stealthim_task_ctx_t *userdata);
+typedef struct _stealthim_tls_connect_ctx {
+    stealthim_tls_ctx_t* ctx;
+    const char* host;
+    int port;
+} _stealthim_tls_connect_ctx_t;
+// stealthim_task_t *stealthim_tls_connect_async(loop_t *loop, stealthim_tls_ctx_t* ctx, const char* host, int port) {
+//     _stealthim_tls_connect_ctx_t *data = calloc(1, sizeof(_stealthim_tls_connect_ctx_t));
+//     if (!data) return NULL;
+//     data->ctx = ctx;
+//     data->host = host;
+//     data->port = port;
+//     return stealthim_task_create(loop, _stealthim_tls_connect_async, data);
+// }
+// int _stealthim_tls_connect_async(stealthim_task_t *task, stealthim_task_ctx_t *ctx) {
+//     stealthim_task_local_var(
+//         stealthim_tls_ctx_t* ctx;
+//         const char* host;
+//         int port;
+//     );
+//     stealthim_task_enter();
+//     _stealthim_tls_connect_ctx_t* data = stealthim_task_userdata(_stealthim_tls_connect_ctx_t*);
+//     stealthim_task_var(ctx) = data->ctx;
+//     stealthim_task_var(host) = data->host;
+//     stealthim_task_var(port) = data->port;
+//     free(data);
+//
+//
+//     stealthim_future_t *fut = stealthim_future_create(loop);
+//     if (!fut) return NULL;
+//
+// #ifdef _WIN32
+//     WSADATA wsa;
+//     WSAStartup(MAKEWORD(2,2), &wsa);
+//     ctx->sock = socket(AF_INET, SOCK_STREAM, 0);
+// #else
+//     ctx->sock = -1;
+// #endif
+//
+//     set_nonblocking(ctx->sock);
+//
+//     struct addrinfo hints, *res;
+//     char port_str[6];
+//     snprintf(port_str, sizeof(port_str), "%d", port);
+//     memset(&hints, 0, sizeof(hints));
+//     hints.ai_family = AF_UNSPEC;
+//     hints.ai_socktype = SOCK_STREAM;
+//
+//     if (getaddrinfo(host, port_str, &hints, &res) != 0) {
+//         stealthim_future_reject(fut, (void*)-1);
+//         return fut;
+//     }
+//
+//     if (connect(ctx->sock, res->ai_addr, res->ai_addrlen) < 0) {
+// #ifdef _WIN32
+//         bool err = WSAGetLastError() != WSAEWOULDBLOCK;
+// #else
+//         bool err = errno != EWOULDBLOCK;
+// #endif
+//         if (err) {
+//             freeaddrinfo(res);
+//             stealthim_future_reject(fut, (void*)-1);
+//             return fut;
+//         }
+//         stealthim_loop_register_handle(loop, (void*)ctx->sock, _stealthim_tls_connect_async_sub_connect, ctx);
+//     }
+//     stealthim_task_end();
+// }
+
 void stealthim_tls_close(stealthim_tls_ctx_t* ctx) {
     if (!ctx) return;
     if (ctx->ssl) SSL_shutdown(ctx->ssl);
@@ -117,8 +201,6 @@ void stealthim_tls_close(stealthim_tls_ctx_t* ctx) {
 #else
     if (ctx->sock >= 0) close(ctx->sock);
 #endif
-    ctx->ssl = NULL;
-    ctx->sock = 0;
 }
 
 int stealthim_tls_send(stealthim_tls_ctx_t* ctx, const char* buf, int len) {

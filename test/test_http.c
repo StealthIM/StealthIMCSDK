@@ -23,7 +23,7 @@ int test_http() {
     // 例子: POST JSON
     const char* headers2[] = { "User-Agent: StealthIM-C/0.1", "Content-Type: application/json", NULL };
     const char* body = "{ \"msg\": \"hello\" }";
-    if (stealthim_http_request("POST", "postman-echo.com", 80, "/post", headers2, body, buffer, sizeof(buffer)) == STEALTHIM_OK) {
+    if (stealthim_http_request("POST", "postman-echo.com", 443, "/post", headers2, body, buffer, sizeof(buffer)) == STEALTHIM_OK) {
         printf("POST Response:\n%s\n", buffer);
     } else {
         return -1;

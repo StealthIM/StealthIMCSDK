@@ -1,8 +1,8 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "../include/stealthim/hal/net/websocket.h"
-#include "../include/stealthim/hal/net/network.h"
+#include "../include/stealthim/hal/net/sync/websocket.h"
+#include "../include/stealthim/hal/net/sync/network.h"
 
 int test_ws() {
     if (stealthim_network_init() != STEALTHIM_OK) {
