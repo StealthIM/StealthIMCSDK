@@ -1,8 +1,8 @@
-#include "stealthim/hal/net/sync/network.h"
-#include "../../../../../include/stealthim/hal/net/tls.h"
-#include "stealthim/hal/logging.h"
+#include "stim/hal/net/sync/network.h"
+#include "../../../../../include/stim/hal/net/tls.h"
+#include "stim/hal/logging.h"
 
-#ifdef STEALTHIM_NETWORK_WIN32
+#ifdef stim_NETWORK_WIN32
 
 #include <stdio.h>
 #include <string.h>
@@ -11,16 +11,16 @@
 #include <stdlib.h>
 #include <ctype.h>
 
-#include "stealthim/hal/tools.h"
+#include "stim/hal/tools.h"
 
 #pragma comment(lib, "ws2_32.lib")
 
-stealthim_status_t stealthim_network_init() {
+stim_status_t stim_network_init() {
     WSADATA wsa;
-    return (WSAStartup(MAKEWORD(2,2), &wsa) == 0) ? STEALTHIM_OK : STEALTHIM_ERR;
+    return (WSAStartup(MAKEWORD(2,2), &wsa) == 0) ? stim_OK : stim_ERR;
 }
 
-void stealthim_network_cleanup() {
+void stim_network_cleanup() {
     WSACleanup();
 }
 
@@ -64,10 +64,10 @@ static int recv_all_socket(void* ctx, char* buf, int maxlen) {
 
 // TLS 分别实现
 static int send_all_tls(void* ctx, const char* buf, int len) {
-    stealthim_tls_ctx_t* tls = (stealthim_tls_ctx_t*)ctx;
+    stim_tls_ctx_t* tls = (stim_tls_ctx_t*)ctx;
     int sent = 0;
     while (sent < len) {
-        int n = stealthim_tls_send(tls, buf + sent, len - sent);
+        int n = stim_tls_send(tls, buf + sent, len - sent);
         if (n <= 0) return -1;
         sent += n;
     }
@@ -75,8 +75,8 @@ static int send_all_tls(void* ctx, const char* buf, int len) {
 }
 
 static int recv_all_tls(void* ctx, char* buf, int maxlen) {
-    stealthim_tls_ctx_t* tls = (stealthim_tls_ctx_t*)ctx;
-    return stealthim_tls_recv(tls, buf, maxlen);
+    stim_tls_ctx_t* tls = (stim_tls_ctx_t*)ctx;
+    return stim_tls_recv(tls, buf, maxlen);
 }
 
 // 接收 HTTP 响应头
@@ -113,12 +113,12 @@ static int build_http_request(const char* method, const char* host, const char* 
 }
 
 // 建立连接（socket 或 TLS）
-static int establish_connection(const char* host, int port, int use_tls, SOCKET* out_sock, stealthim_tls_ctx_t** out_tls) {
+static int establish_connection(const char* host, int port, int use_tls, SOCKET* out_sock, stim_tls_ctx_t** out_tls) {
     if (use_tls) {
-        stealthim_tls_ctx_t* tls_ctx = stealthim_tls_create();
+        stim_tls_ctx_t* tls_ctx = stim_tls_create();
         if (!tls_ctx) return -1;
-        if (stealthim_tls_connect(tls_ctx, host, port) != 0) {
-            stealthim_tls_destroy(tls_ctx);
+        if (stim_tls_connect(tls_ctx, host, port) != 0) {
+            stim_tls_destroy(tls_ctx);
             return -1;
         }
         *out_tls = tls_ctx;
@@ -151,10 +151,10 @@ static int send_http_data(send_func_t send_func, void* ctx, const char* request,
 }
 
 // 资源清理
-static void cleanup_connection(int use_tls, SOCKET sock, stealthim_tls_ctx_t* tls_ctx) {
+static void cleanup_connection(int use_tls, SOCKET sock, stim_tls_ctx_t* tls_ctx) {
     if (use_tls && tls_ctx) {
-        stealthim_tls_close(tls_ctx);
-        stealthim_tls_destroy(tls_ctx);
+        stim_tls_close(tls_ctx);
+        stim_tls_destroy(tls_ctx);
     }
     if (!use_tls && sock != INVALID_SOCKET) {
         closesocket(sock);
@@ -195,7 +195,7 @@ static int receive_http_body(char* response, int maxlen, int header_len, int con
     return total;
 }
 
-stealthim_status_t stealthim_http_request(
+stim_status_t stim_http_request(
     const char* method,
     const char* host,
     int port,
@@ -207,20 +207,20 @@ stealthim_status_t stealthim_http_request(
 ) {
     int use_tls = (port == 443);
     SOCKET sock = INVALID_SOCKET;
-    stealthim_tls_ctx_t* tls_ctx = NULL;
+    stim_tls_ctx_t* tls_ctx = NULL;
     send_func_t send_func = NULL;
     recv_func_t recv_func = NULL;
     void* ctx = NULL;
     int total = 0;
-    int ret = STEALTHIM_ERR;
+    int ret = stim_ERR;
 
     // 构造请求
     char request[2048];
     int req_len = build_http_request(method, host, path, headers, body, request, sizeof(request));
-    if (req_len <= 0) return STEALTHIM_ERR;
+    if (req_len <= 0) return stim_ERR;
 
     // 建立连接
-    if (establish_connection(host, port, use_tls, &sock, &tls_ctx) != 0) return STEALTHIM_ERR;
+    if (establish_connection(host, port, use_tls, &sock, &tls_ctx) != 0) return stim_ERR;
     if (use_tls) {
         send_func = send_all_tls;
         recv_func = recv_all_tls;
@@ -245,7 +245,7 @@ stealthim_status_t stealthim_http_request(
     total = receive_http_body(response, maxlen, header_len, content_length, chunked, recv_func, ctx);
     if (total < 0) goto cleanup;
 
-    ret = STEALTHIM_OK;
+    ret = stim_OK;
 
 cleanup:
     cleanup_connection(use_tls, sock, tls_ctx);

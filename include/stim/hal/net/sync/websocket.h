@@ -1,27 +1,27 @@
 #pragma once
-#include "stealthim/config.h"
+#include "stim/config.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 typedef enum {
-    STEALTHIM_WS_OK = 0,
-    STEALTHIM_WS_ERR = -1,
-    STEALTHIM_WS_CLOSED = -2
-} stealthim_ws_status_t;
+    stim_WS_OK = 0,
+    stim_WS_ERR = -1,
+    stim_WS_CLOSED = -2
+} stim_ws_status_t;
 
 // WebSocket 句柄（不透明指针）
-typedef struct stealthim_ws_t stealthim_ws_t;
+typedef struct stim_ws_t stim_ws_t;
 
-void stealthim_ws_init();
+void stim_ws_init();
 
 /**
  * 创建一个WebSocket连接
  * @param url   WebSocket URL (例如 "ws://echo.websocket.org:80/")
  * @return 连接对象 (NULL = 失败)
  */
-stealthim_ws_t* stealthim_ws_connect(const char* url);
+stim_ws_t* stim_ws_connect(const char* url);
 
 /**
  * 发送消息
@@ -30,7 +30,7 @@ stealthim_ws_t* stealthim_ws_connect(const char* url);
  * @param len   数据长度
  * @param is_text  是否文本帧 (1 = 文本, 0 = 二进制)
  */
-stealthim_ws_status_t stealthim_ws_send(stealthim_ws_t* ws, const void* data, int len, int is_text);
+stim_ws_status_t stim_ws_send(stim_ws_t* ws, const void* data, int len, int is_text);
 
 /**
  * 接收消息（阻塞）
@@ -40,12 +40,12 @@ stealthim_ws_status_t stealthim_ws_send(stealthim_ws_t* ws, const void* data, in
  * @param is_text 输出参数：是否文本帧
  * @return 接收的字节数，负数 = 错误
  */
-int stealthim_ws_recv(stealthim_ws_t* ws, void* buffer, int maxlen, int* is_text);
+int stim_ws_recv(stim_ws_t* ws, void* buffer, int maxlen, int* is_text);
 
 /**
  * 关闭连接
  */
-void stealthim_ws_close(stealthim_ws_t* ws);
+void stim_ws_close(stim_ws_t* ws);
 
 #ifdef __cplusplus
 }

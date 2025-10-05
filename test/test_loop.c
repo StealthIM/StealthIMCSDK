@@ -33,7 +33,7 @@
   #define closesocket close
 #endif
 
-#include "../include/stealthim/hal/async/loop.h"
+#include "../include/stim/hal/async/loop.h"
 
 static void socket_cb(loop_t *loop, void *userdata) {
     recv_data_t *data = (recv_data_t*)userdata;
@@ -58,7 +58,7 @@ static void timer3_cb(loop_t *loop, void *userdata) {
     if (count < 4) {
         printf("Timer3 fired: %d, rescheduling...\n", count);
         (*(int*)userdata)++;
-        stealthim_loop_add_timer(loop, 300, timer3_cb, userdata);
+        stim_loop_add_timer(loop, 300, timer3_cb, userdata);
     } else {
         printf("Timer3 fired: %d, done.\n", count);
     }
@@ -130,19 +130,19 @@ int test_loop() {
 
     printf("Creating loop\n");
 
-    loop_t *loop = stealthim_loop_create();
+    loop_t *loop = stim_loop_create();
     printf("Created loop\n");
 
-    stealthim_loop_register_handle(loop, (void*)(intptr_t)sock, socket_cb, NULL);
+    stim_loop_register_handle(loop, (void*)(intptr_t)sock, socket_cb, NULL);
 
 
-    stealthim_loop_add_timer(loop, 500, timer1_cb, "hello 500ms");
-    stealthim_loop_add_timer(loop, 1500, timer2_cb, "bye 1500ms");
+    stim_loop_add_timer(loop, 500, timer1_cb, "hello 500ms");
+    stim_loop_add_timer(loop, 1500, timer2_cb, "bye 1500ms");
     int timer3_count = 0;
-    stealthim_loop_add_timer(loop, 300, timer3_cb, &timer3_count);
+    stim_loop_add_timer(loop, 300, timer3_cb, &timer3_count);
 
     printf("Run\n");
-    stealthim_loop_run(loop);
+    stim_loop_run(loop);
     printf("Ran\n");
 
     int i = 0;
@@ -158,7 +158,7 @@ int test_loop() {
         }
     }
 
-    stealthim_loop_destroy(loop);
+    stim_loop_destroy(loop);
 
     closesocket(sock);
 #ifdef _WIN32

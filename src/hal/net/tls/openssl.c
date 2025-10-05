@@ -1,8 +1,8 @@
-#include "../../../../include/stealthim/hal/net/tls.h"
+#include "../../../../include/stim/hal/net/tls.h"
 
-#ifdef STEALTHIM_TLS_OPENSSL
+#ifdef stim_TLS_OPENSSL
 
-#include "stealthim/hal/logging.h"
+#include "stim/hal/logging.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,7 +11,7 @@
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 
-#include "stealthim/hal/async/task.h"
+#include "stim/hal/async/task.h"
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -20,9 +20,10 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netdb.h>
+#include <fcntl.h>
 #endif
 
-struct stealthim_tls_ctx {
+struct stim_tls_ctx {
     SSL* ssl;
     SSL_CTX* ctx;
 #ifdef _WIN32
@@ -32,19 +33,19 @@ struct stealthim_tls_ctx {
 #endif
 };
 
-int stealthim_tls_init(void) {
+int stim_tls_init(void) {
     SSL_load_error_strings();
     OpenSSL_add_ssl_algorithms();
     return 0;
 }
 
-int stealthim_tls_cleanup(void) {
+int stim_tls_cleanup(void) {
     EVP_cleanup();
     return 0;
 }
 
-stealthim_tls_ctx_t* stealthim_tls_create(void) {
-    stealthim_tls_ctx_t* t = (stealthim_tls_ctx_t*)calloc(1, sizeof(*t));
+stim_tls_ctx_t* stim_tls_create(void) {
+    stim_tls_ctx_t* t = (stim_tls_ctx_t*)calloc(1, sizeof(*t));
     if (!t) return NULL;
 
     t->ctx = SSL_CTX_new(TLS_client_method());
@@ -55,7 +56,7 @@ stealthim_tls_ctx_t* stealthim_tls_create(void) {
     return t;
 }
 
-void stealthim_tls_destroy(stealthim_tls_ctx_t* ctx) {
+void stim_tls_destroy(stim_tls_ctx_t* ctx) {
     if (!ctx) return;
     if (ctx->ssl) SSL_free(ctx->ssl);
     if (ctx->ctx) SSL_CTX_free(ctx->ctx);
@@ -67,7 +68,7 @@ void stealthim_tls_destroy(stealthim_tls_ctx_t* ctx) {
     free(ctx);
 }
 
-int stealthim_tls_connect(stealthim_tls_ctx_t* ctx, const char* host, int port) {
+int stim_tls_connect(stim_tls_ctx_t* ctx, const char* host, int port) {
     if (!ctx) return -1;
 
     // 创建普通 TCP socket
@@ -123,37 +124,27 @@ int stealthim_tls_connect(stealthim_tls_ctx_t* ctx, const char* host, int port) 
 //     return fcntl(sock, F_SETFL, flags | O_NONBLOCK);
 // }
 // #endif
-
-int _stealthim_tls_connect_async(stealthim_task_t *task, stealthim_task_ctx_t *userdata);
-typedef struct _stealthim_tls_connect_ctx {
-    stealthim_tls_ctx_t* ctx;
-    const char* host;
-    int port;
-} _stealthim_tls_connect_ctx_t;
-// stealthim_task_t *stealthim_tls_connect_async(loop_t *loop, stealthim_tls_ctx_t* ctx, const char* host, int port) {
-//     _stealthim_tls_connect_ctx_t *data = calloc(1, sizeof(_stealthim_tls_connect_ctx_t));
-//     if (!data) return NULL;
-//     data->ctx = ctx;
-//     data->host = host;
-//     data->port = port;
-//     return stealthim_task_create(loop, _stealthim_tls_connect_async, data);
-// }
-// int _stealthim_tls_connect_async(stealthim_task_t *task, stealthim_task_ctx_t *ctx) {
-//     stealthim_task_local_var(
-//         stealthim_tls_ctx_t* ctx;
+//
+// int _stim_tls_connect_async(stim_task_t *task, stim_task_ctx_t *userdata);
+// typedef struct _stim_tls_connect_ctx {
+//     stim_tls_ctx_t* ctx;
+//     const char* host;
+//     int port;
+// } _stim_tls_connect_ctx_t;
+//
+// int _stim_tls_connect_async(stim_task_t *task, stim_task_ctx_t *ctx) {
+//     stim_task_local_var(
+//         stim_tls_ctx_t* ctx;
 //         const char* host;
 //         int port;
+//         struct addrinfo *res;
 //     );
-//     stealthim_task_enter();
-//     _stealthim_tls_connect_ctx_t* data = stealthim_task_userdata(_stealthim_tls_connect_ctx_t*);
-//     stealthim_task_var(ctx) = data->ctx;
-//     stealthim_task_var(host) = data->host;
-//     stealthim_task_var(port) = data->port;
+//     stim_task_enter();
+//     _stim_tls_connect_ctx_t* data = stim_task_userdata(_stim_tls_connect_ctx_t*);
+//     stim_task_var(ctx) = data->ctx;
+//     stim_task_var(host) = data->host;
+//     stim_task_var(port) = data->port;
 //     free(data);
-//
-//
-//     stealthim_future_t *fut = stealthim_future_create(loop);
-//     if (!fut) return NULL;
 //
 // #ifdef _WIN32
 //     WSADATA wsa;
@@ -163,37 +154,54 @@ typedef struct _stealthim_tls_connect_ctx {
 //     ctx->sock = -1;
 // #endif
 //
-//     set_nonblocking(ctx->sock);
+//      set_nonblocking(ctx->sock);
 //
-//     struct addrinfo hints, *res;
-//     char port_str[6];
-//     snprintf(port_str, sizeof(port_str), "%d", port);
-//     memset(&hints, 0, sizeof(hints));
-//     hints.ai_family = AF_UNSPEC;
-//     hints.ai_socktype = SOCK_STREAM;
+//      struct addrinfo hints;
+//      char port_str[6];
+//      snprintf(port_str, sizeof(port_str), "%d", port);
+//      memset(&hints, 0, sizeof(hints));
+//      hints.ai_family = AF_UNSPEC;
+//      hints.ai_socktype = SOCK_STREAM;
 //
-//     if (getaddrinfo(host, port_str, &hints, &res) != 0) {
-//         stealthim_future_reject(fut, (void*)-1);
-//         return fut;
-//     }
+//      if (getaddrinfo(host, port_str, &hints, &stim_task_var(res)) != 0) {
+//          stim_task_return(-1);
+//      }
 //
-//     if (connect(ctx->sock, res->ai_addr, res->ai_addrlen) < 0) {
+//     if (connect(ctx->sock, stim_task_var(res)->ai_addr, stim_task_var(res)->ai_addrlen) < 0) {
 // #ifdef _WIN32
 //         bool err = WSAGetLastError() != WSAEWOULDBLOCK;
 // #else
 //         bool err = errno != EWOULDBLOCK;
 // #endif
 //         if (err) {
-//             freeaddrinfo(res);
-//             stealthim_future_reject(fut, (void*)-1);
-//             return fut;
+//             freeaddrinfo(stim_task_var(res));
+//             stim_task_return(-1);
 //         }
-//         stealthim_loop_register_handle(loop, (void*)ctx->sock, _stealthim_tls_connect_async_sub_connect, ctx);
+//         stim_task_register_handle(ctx->sock);
+//         freeaddrinfo(stim_task_var(res));
+//
+//         stim_task_var(ctx)->ssl = SSL_new(stim_task_var(ctx)->ctx);
+//         if (!stim_task_var(ctx)->ssl) {
+//             stim_task_return(-1);
+//         }
+//         SSL_set_fd(stim_task_var(ctx)->ssl, stim_task_var(ctx)->sock);
+//         SSL_set_tlsext_host_name(stim_task_var(ctx)->ssl, stim_task_var(host));
+//         int ret = SSL_connect(stim_task_var(ctx)->ssl);
+//
 //     }
-//     stealthim_task_end();
+//     stim_task_end();
+// }
+//
+// stim_task_t *stim_tls_connect_async(loop_t *loop, stim_tls_ctx_t* ctx, const char* host, int port) {
+//     _stim_tls_connect_ctx_t *data = calloc(1, sizeof(_stim_tls_connect_ctx_t));
+//     if (!data) return NULL;
+//     data->ctx = ctx;
+//     data->host = host;
+//     data->port = port;
+//     return stim_task_create(loop, _stim_tls_connect_async, data);
 // }
 
-void stealthim_tls_close(stealthim_tls_ctx_t* ctx) {
+void stim_tls_close(stim_tls_ctx_t* ctx) {
     if (!ctx) return;
     if (ctx->ssl) SSL_shutdown(ctx->ssl);
 #ifdef _WIN32
@@ -203,12 +211,12 @@ void stealthim_tls_close(stealthim_tls_ctx_t* ctx) {
 #endif
 }
 
-int stealthim_tls_send(stealthim_tls_ctx_t* ctx, const char* buf, int len) {
+int stim_tls_send(stim_tls_ctx_t* ctx, const char* buf, int len) {
     if (!ctx || !ctx->ssl) return -1;
     return SSL_write(ctx->ssl, buf, len);
 }
 
-int stealthim_tls_recv(stealthim_tls_ctx_t* ctx, char* buf, int maxlen) {
+int stim_tls_recv(stim_tls_ctx_t* ctx, char* buf, int maxlen) {
     if (!ctx || !ctx->ssl) return -1;
     return SSL_read(ctx->ssl, buf, maxlen);
 }

@@ -1,16 +1,16 @@
 #pragma once
-#include <stealthim/config.h>
+#include <stim/config.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 typedef enum {
-    STEALTHIM_OK = 0,
-    STEALTHIM_ERR = -1,
-} stealthim_status_t;
+    stim_OK = 0,
+    stim_ERR = -1,
+} stim_status_t;
 
-stealthim_status_t stealthim_network_init();
+stim_status_t stim_network_init();
 
 /**
  * 通用 HTTP 请求
@@ -23,7 +23,7 @@ stealthim_status_t stealthim_network_init();
  * @param response 响应缓存区
  * @param maxlen   响应缓存区大小
  */
-stealthim_status_t stealthim_http_request(
+stim_status_t stim_http_request(
     const char* method,
     const char* host,
     int port,
@@ -36,7 +36,7 @@ stealthim_status_t stealthim_http_request(
 
 int decode_chunked(const char* src, int src_len, char* dst, int dst_maxlen);
 
-void stealthim_network_cleanup();
+void stim_network_cleanup();
 
 #ifdef __cplusplus
 }

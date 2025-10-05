@@ -1,8 +1,8 @@
-#include "stealthim/hal/net/sync/websocket.h"
+#include "stim/hal/net/sync/websocket.h"
 
-#ifdef STEALTHIM_WS_WIN32
+#ifdef stim_WS_WIN32
 
-#include "../../../../../include/stealthim/hal/net/tls.h"
+#include "../../../../../include/stim/hal/net/tls.h"
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -12,17 +12,17 @@
 #include <string.h>
 #include <time.h>
 
-#include "stealthim/hal/logging.h"
-#include "stealthim/hal/tools.h"
+#include "stim/hal/logging.h"
+#include "stim/hal/tools.h"
 
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "crypt32.lib")
 
-struct stealthim_ws_t {
+struct stim_ws_t {
     SOCKET sock;
     char sec_key[64];
     int use_tls;
-    stealthim_tls_ctx_t* tls;
+    stim_tls_ctx_t* tls;
 };
 
 // ================== 工具函数 ===================
@@ -78,30 +78,30 @@ static int parse_url(const char* url, int* is_tls, char* host, int* port, char* 
 
 // ================== API 实现 ===================
 
-void stealthim_ws_init() {
+void stim_ws_init() {
     WSADATA wsa;
     WSAStartup(MAKEWORD(2,2), &wsa);
-    stealthim_tls_init(); // 初始化 TLS 库
+    stim_tls_init(); // 初始化 TLS 库
     srand(time(NULL));
 }
 
-stealthim_ws_t* stealthim_ws_connect(const char* url) {
+stim_ws_t* stim_ws_connect(const char* url) {
     char host[256], path[256];
     int port, is_tls;
     if (parse_url(url, &is_tls, host, &port, path) != 0) return NULL;
 
-    stealthim_ws_t* ws = calloc(1, sizeof(*ws));
+    stim_ws_t* ws = calloc(1, sizeof(*ws));
     ws->use_tls = is_tls;
 
     if (is_tls) {
         // TLS 连接
-        ws->tls = stealthim_tls_create();
+        ws->tls = stim_tls_create();
         if (!ws->tls) {
             free(ws);
             return NULL;
         }
-        if (stealthim_tls_connect(ws->tls, host, port) != 0) {
-            stealthim_tls_destroy(ws->tls);
+        if (stim_tls_connect(ws->tls, host, port) != 0) {
+            stim_tls_destroy(ws->tls);
             free(ws);
             return NULL;
         }
@@ -146,9 +146,9 @@ stealthim_ws_t* stealthim_ws_connect(const char* url) {
         path, host, port, ws->sec_key);
 
     if (is_tls) {
-        if (stealthim_tls_send(ws->tls, req, (int)strlen(req)) <= 0) {
-            stealthim_tls_close(ws->tls);
-            stealthim_tls_destroy(ws->tls);
+        if (stim_tls_send(ws->tls, req, (int)strlen(req)) <= 0) {
+            stim_tls_close(ws->tls);
+            stim_tls_destroy(ws->tls);
             free(ws);
             return NULL;
         }
@@ -162,24 +162,24 @@ stealthim_ws_t* stealthim_ws_connect(const char* url) {
 
     // 读取响应
     char buf[1024];
-    int n = is_tls ? stealthim_tls_recv(ws->tls, buf, sizeof(buf)-1)
+    int n = is_tls ? stim_tls_recv(ws->tls, buf, sizeof(buf)-1)
                    : recv(ws->sock, buf, sizeof(buf)-1, 0);
     if (n <= 0) {
-        stealthim_ws_close(ws);
+        stim_ws_close(ws);
         return NULL;
     }
     buf[n] = 0;
 
     if (strstr(buf, "101") == NULL || strcasestr(buf, "Sec-WebSocket-Accept") == NULL) {
-        stealthim_ws_close(ws);
+        stim_ws_close(ws);
         return NULL;
     }
 
     return ws;
 }
 
-stealthim_ws_status_t stealthim_ws_send(stealthim_ws_t* ws, const void* data, int len, int is_text) {
-    if (!ws) return STEALTHIM_WS_ERR;
+stim_ws_status_t stim_ws_send(stim_ws_t* ws, const void* data, int len, int is_text) {
+    if (!ws) return stim_WS_ERR;
     unsigned char header[10];
     int hlen = 0;
 
@@ -193,7 +193,7 @@ stealthim_ws_status_t stealthim_ws_send(stealthim_ws_t* ws, const void* data, in
         header[3] = len & 0xFF;
         hlen = 4;
     } else {
-        return STEALTHIM_WS_ERR;
+        return stim_WS_ERR;
     }
 
     unsigned char mask[4];
@@ -209,53 +209,53 @@ stealthim_ws_status_t stealthim_ws_send(stealthim_ws_t* ws, const void* data, in
 
     int ret;
     if (ws->use_tls)
-        ret = stealthim_tls_send(ws->tls, frame, hlen + len);
+        ret = stim_tls_send(ws->tls, frame, hlen + len);
     else
         ret = send(ws->sock, frame, hlen + len, 0);
 
     free(frame);
-    return (ret == hlen + len) ? STEALTHIM_WS_OK : STEALTHIM_WS_ERR;
+    return (ret == hlen + len) ? stim_WS_OK : stim_WS_ERR;
 }
 
-int stealthim_ws_recv(stealthim_ws_t* ws, void* buffer, int maxlen, int* is_text) {
-    if (!ws) return STEALTHIM_WS_ERR;
+int stim_ws_recv(stim_ws_t* ws, void* buffer, int maxlen, int* is_text) {
+    if (!ws) return stim_WS_ERR;
 
     unsigned char hdr[2];
-    int n = ws->use_tls ? stealthim_tls_recv(ws->tls, (char*)hdr, 2)
+    int n = ws->use_tls ? stim_tls_recv(ws->tls, (char*)hdr, 2)
                         : recv(ws->sock, (char*)hdr, 2, 0);
-    if (n <= 0) return STEALTHIM_WS_CLOSED;
+    if (n <= 0) return stim_WS_CLOSED;
 
     int opcode = hdr[0] & 0x0F;
     int masked = (hdr[1] & 0x80) != 0;
     int len = hdr[1] & 0x7F;
 
-    if (opcode == 0x8) return STEALTHIM_WS_CLOSED;
+    if (opcode == 0x8) return stim_WS_CLOSED;
     if (opcode == 0x9) {
         char pong[2] = { (char)0x8A, 0x00 };
-        if (ws->use_tls) stealthim_tls_send(ws->tls, pong, 2);
+        if (ws->use_tls) stim_tls_send(ws->tls, pong, 2);
         else send(ws->sock, pong, 2, 0);
         return 0;
     }
 
     if (len == 126) {
         unsigned char ext[2];
-        if (ws->use_tls) stealthim_tls_recv(ws->tls, (char*)ext, 2);
+        if (ws->use_tls) stim_tls_recv(ws->tls, (char*)ext, 2);
         else recv(ws->sock, (char*)ext, 2, 0);
         len = (ext[0]<<8) | ext[1];
     } else if (len == 127) {
-        return STEALTHIM_WS_ERR;
+        return stim_WS_ERR;
     }
 
     unsigned char mask[4];
     if (masked) {
-        if (ws->use_tls) stealthim_tls_recv(ws->tls, (char*)mask, 4);
+        if (ws->use_tls) stim_tls_recv(ws->tls, (char*)mask, 4);
         else recv(ws->sock, (char*)mask, 4, 0);
     }
 
-    if (len > maxlen) return STEALTHIM_WS_ERR;
-    n = ws->use_tls ? stealthim_tls_recv(ws->tls, (char*)buffer, len)
+    if (len > maxlen) return stim_WS_ERR;
+    n = ws->use_tls ? stim_tls_recv(ws->tls, (char*)buffer, len)
                     : recv(ws->sock, (char*)buffer, len, 0);
-    if (n != len) return STEALTHIM_WS_ERR;
+    if (n != len) return stim_WS_ERR;
 
     if (masked) {
         for (int i=0; i<len; i++) {
@@ -267,13 +267,13 @@ int stealthim_ws_recv(stealthim_ws_t* ws, void* buffer, int maxlen, int* is_text
     return len;
 }
 
-void stealthim_ws_close(stealthim_ws_t* ws) {
+void stim_ws_close(stim_ws_t* ws) {
     if (!ws) return;
     unsigned char closef[2] = {0x88, 0x00};
     if (ws->use_tls) {
-        stealthim_tls_send(ws->tls, (char*)closef, 2);
-        stealthim_tls_close(ws->tls);
-        stealthim_tls_destroy(ws->tls);
+        stim_tls_send(ws->tls, (char*)closef, 2);
+        stim_tls_close(ws->tls);
+        stim_tls_destroy(ws->tls);
     } else {
         send(ws->sock, (char*)closef, 2, 0);
         closesocket(ws->sock);

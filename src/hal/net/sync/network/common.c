@@ -1,6 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
-#include <stealthim/stealthim.h>
+#include <stim/stim.h>
 
 // 解码 chunked body，返回长度
 int decode_chunked(const char* src, int src_len, char* dst, int dst_maxlen) {

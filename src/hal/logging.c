@@ -1,15 +1,15 @@
-#include "stealthim/hal/logging.h"
+#include "stim/hal/logging.h"
 #include <stdarg.h>
 #include <stdio.h>
 
-static stealthim_log_callback_t g_log_cb = NULL;
+static stim_log_callback_t g_log_cb = NULL;
 
-void stealthim_set_log_callback(stealthim_log_callback_t cb) {
+void stim_set_log_callback(stim_log_callback_t cb) {
     g_log_cb = cb;
 }
 
-void stealthim_log(stealthim_log_level_t level, const char* fmt, ...) {
-#if defined(STEALTHIM_LOG_STDIO) || defined(STEALTHIM_LOG_CUSTOM) || defined(STEALTHIM_LOG_ENABLED)
+void stim_log(stim_log_level_t level, const char* fmt, ...) {
+#if defined(stim_LOG_STDIO) || defined(stim_LOG_CUSTOM) || defined(stim_LOG_ENABLED)
     char buffer[512];
     va_list args;
 
@@ -22,10 +22,10 @@ void stealthim_log(stealthim_log_level_t level, const char* fmt, ...) {
     } else {
         const char* level_str = "UNK";
         switch (level) {
-            case STEALTHIM_LOG_DEBUG: level_str = "DEBUG"; break;
-            case STEALTHIM_LOG_INFO:  level_str = "INFO";  break;
-            case STEALTHIM_LOG_WARN:  level_str = "WARN";  break;
-            case STEALTHIM_LOG_ERROR: level_str = "ERROR"; break;
+            case stim_LOG_DEBUG: level_str = "DEBUG"; break;
+            case stim_LOG_INFO:  level_str = "INFO";  break;
+            case stim_LOG_WARN:  level_str = "WARN";  break;
+            case stim_LOG_ERROR: level_str = "ERROR"; break;
         }
         printf("[%s] %s\n", level_str, buffer);
 

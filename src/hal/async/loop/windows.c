@@ -1,6 +1,6 @@
-#include "stealthim/hal/async/loop.h"
+#include "stim/hal/async/loop.h"
 
-#ifdef STEALTHIM_ASYNC_WIN32
+#ifdef stim_ASYNC_WIN32
 
 #include <windows.h>
 #include <winsock2.h>
@@ -112,12 +112,12 @@ static timer_req_t* heap_pop(loop_t *loop) {
 
 // -------------------- 定时器 API --------------------
 
-timer_id_t stealthim_loop_add_timer(loop_t *loop, uint64_t when_ms, loop_cb_t cb, void *userdata) {
+timer_id_t stim_loop_add_timer(loop_t *loop, uint64_t when_ms, loop_cb_t cb, void *userdata) {
     timer_req_t *req = calloc(1, sizeof(timer_req_t));
     req->cb = cb;
     req->userdata = userdata;
     req->id = InterlockedIncrement(&loop->next_timer_id);
-    req->expire_ms = stealthim_loop_time_ms(loop) + when_ms;
+    req->expire_ms = stim_loop_time_ms(loop) + when_ms;
 
     EnterCriticalSection(&loop->lock);
     heap_push(loop, req);
@@ -128,7 +128,7 @@ timer_id_t stealthim_loop_add_timer(loop_t *loop, uint64_t when_ms, loop_cb_t cb
     return req->id;
 }
 
-int stealthim_loop_cancel_timer(loop_t *loop, timer_id_t id) {
+int stim_loop_cancel_timer(loop_t *loop, timer_id_t id) {
     EnterCriticalSection(&loop->lock);
     for (int i = 0; i < loop->heap_size; i++) {
         if (loop->heap[i]->id == id) {
@@ -143,7 +143,7 @@ int stealthim_loop_cancel_timer(loop_t *loop, timer_id_t id) {
 
 // -------------------- posted 事件 --------------------
 
-void stealthim_loop_call_soon(loop_t *loop, loop_cb_t cb, void *userdata) {
+void stim_loop_call_soon(loop_t *loop, loop_cb_t cb, void *userdata) {
     loop_event_t *ev = (loop_event_t*)calloc(1, sizeof(loop_event_t));
     ev->type = EV_POST;
     ev->userdata = userdata;
@@ -152,13 +152,13 @@ void stealthim_loop_call_soon(loop_t *loop, loop_cb_t cb, void *userdata) {
     PostQueuedCompletionStatus(loop->iocp, 0, 0, &ev->ov);
 }
 
-void stealthim_loop_post(loop_t *loop, loop_cb_t cb, void *userdata) {
-    stealthim_loop_call_soon(loop, cb, userdata);
+void stim_loop_post(loop_t *loop, loop_cb_t cb, void *userdata) {
+    stim_loop_call_soon(loop, cb, userdata);
 }
 
 // -------------------- socket HANDLE --------------------
 
-int stealthim_loop_register_handle(loop_t *loop, void *handle, loop_cb_t cb, void *userdata) {
+int stim_loop_register_handle(loop_t *loop, void *handle, loop_cb_t cb, void *userdata) {
     SOCKET s = (SOCKET)handle;
 
     if (!CreateIoCompletionPort((HANDLE)s, loop->iocp, (ULONG_PTR)s, 0))
@@ -203,7 +203,7 @@ int stealthim_loop_register_handle(loop_t *loop, void *handle, loop_cb_t cb, voi
     return 0;
 }
 
-int stealthim_loop_unregister_handle(loop_t *loop, void *handle, bool close_socket) {
+int stim_loop_unregister_handle(loop_t *loop, void *handle, bool close_socket) {
     SOCKET s = (SOCKET)handle;
     EnterCriticalSection(&loop->lock);
     handle_req_t **p = &loop->handles;
@@ -231,7 +231,7 @@ void loop_run_main(loop_t *loop) {
     OVERLAPPED *ov;
 
     while (!loop->stop_flag) {
-        uint64_t now = stealthim_loop_time_ms(loop);
+        uint64_t now = stim_loop_time_ms(loop);
         DWORD timeout = INFINITE;
 
         EnterCriticalSection(&loop->lock);
@@ -273,7 +273,7 @@ void loop_run_main(loop_t *loop) {
                 .len = bytes
             };
             if (bytes == 0) {
-                stealthim_loop_unregister_handle(loop, (void*)ev->sock.handle->sock, true);
+                stim_loop_unregister_handle(loop, (void*)ev->sock.handle->sock, true);
                 break;
             }
             ev->sock.cb(loop, &data);
@@ -290,7 +290,7 @@ void loop_run_main(loop_t *loop) {
                               &ev->ov,
                               NULL);
             if (ret == SOCKET_ERROR && WSAGetLastError() != WSA_IO_PENDING) {
-                stealthim_loop_unregister_handle(loop, (void*)ev->sock.handle->sock, false);
+                stim_loop_unregister_handle(loop, (void*)ev->sock.handle->sock, false);
                 break;
             }
             break;
@@ -306,7 +306,7 @@ static DWORD WINAPI loop_thread_fn(LPVOID param) {
     return 0;
 }
 
-loop_t *stealthim_loop_create() {
+loop_t *stim_loop_create() {
     WSADATA wsa;
     WSAStartup(MAKEWORD(2,2), &wsa);
 
@@ -317,11 +317,11 @@ loop_t *stealthim_loop_create() {
     return loop;
 }
 
-void stealthim_loop_run(loop_t *loop) {
+void stim_loop_run(loop_t *loop) {
     loop->thread = CreateThread(NULL, 0, loop_thread_fn, loop, 0, NULL);
 }
 
-void stealthim_loop_stop(loop_t *loop) {
+void stim_loop_stop(loop_t *loop) {
     loop->stop_flag = 1;
     PostQueuedCompletionStatus(loop->iocp, 0, 0, NULL);
     if (loop->thread) {
@@ -331,9 +331,9 @@ void stealthim_loop_stop(loop_t *loop) {
     }
 }
 
-void stealthim_loop_destroy(loop_t *loop) {
+void stim_loop_destroy(loop_t *loop) {
     if (!loop) return;
-    stealthim_loop_stop(loop);
+    stim_loop_stop(loop);
 
     CloseHandle(loop->iocp);
 
@@ -352,7 +352,7 @@ void stealthim_loop_destroy(loop_t *loop) {
     free(loop);
 }
 
-uint64_t stealthim_loop_time_ms(loop_t *loop) {
+uint64_t stim_loop_time_ms(loop_t *loop) {
     (void)loop;
     FILETIME ft;
     GetSystemTimeAsFileTime(&ft);

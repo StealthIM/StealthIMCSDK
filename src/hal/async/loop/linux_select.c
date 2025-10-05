@@ -1,6 +1,6 @@
-#include "stealthim/hal/async/loop.h"
+#include "stim/hal/async/loop.h"
 
-#ifdef STEALTHIM_ASYNC_LINUX_SELECT
+#ifdef stim_ASYNC_LINUX_SELECT
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -70,7 +70,7 @@ static uint64_t now_ms(void) {
     return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)(ts.tv_nsec / 1000000ULL);
 }
 
-uint64_t stealthim_loop_time_ms(loop_t *loop) {
+uint64_t stim_loop_time_ms(loop_t *loop) {
     (void)loop;
     return now_ms();
 }
@@ -133,7 +133,7 @@ static timer_req_t *heap_pop(loop_t *loop) {
 
 // -------------------- posted 事件队列 --------------------
 
-void stealthim_loop_call_soon(loop_t *loop, loop_cb_t cb, void *userdata) {
+void stim_loop_call_soon(loop_t *loop, loop_cb_t cb, void *userdata) {
     if (!loop || !cb) return;
     posted_event_t *p = calloc(1, sizeof(posted_event_t));
     if (!p) return;
@@ -157,9 +157,9 @@ void stealthim_loop_call_soon(loop_t *loop, loop_cb_t cb, void *userdata) {
     (void)r;
 }
 
-void stealthim_loop_post(loop_t *loop, loop_cb_t cb, void *userdata) {
+void stim_loop_post(loop_t *loop, loop_cb_t cb, void *userdata) {
     // thread-safe wrapper; semantics same为简单实现
-    stealthim_loop_call_soon(loop, cb, userdata);
+    stim_loop_call_soon(loop, cb, userdata);
 }
 
 // -------------------- handle (socket) 的注册/注销 --------------------
@@ -172,7 +172,7 @@ static int set_nonblocking(int fd) {
     return 0;
 }
 
-int stealthim_loop_register_handle(loop_t *loop, void *handle, loop_cb_t cb, void *userdata) {
+int stim_loop_register_handle(loop_t *loop, void *handle, loop_cb_t cb, void *userdata) {
     if (!loop || !handle || !cb) return -1;
     int fd = (int)(intptr_t)handle;
 
@@ -206,7 +206,7 @@ int stealthim_loop_register_handle(loop_t *loop, void *handle, loop_cb_t cb, voi
     return 0;
 }
 
-int stealthim_loop_unregister_handle(loop_t *loop, void *handle, bool close_socket) {
+int stim_loop_unregister_handle(loop_t *loop, void *handle, bool close_socket) {
     if (!loop || !handle) return -1;
     int fd = (int)(intptr_t)handle;
 
@@ -247,7 +247,7 @@ int stealthim_loop_unregister_handle(loop_t *loop, void *handle, bool close_sock
 
 // -------------------- 定时器 API --------------------
 
-timer_id_t stealthim_loop_add_timer(loop_t *loop, uint64_t when_ms, loop_cb_t cb, void *userdata) {
+timer_id_t stim_loop_add_timer(loop_t *loop, uint64_t when_ms, loop_cb_t cb, void *userdata) {
     if (!loop || !cb) return -1;
     timer_req_t *req = calloc(1, sizeof(timer_req_t));
     if (!req) return -1;
@@ -270,7 +270,7 @@ timer_id_t stealthim_loop_add_timer(loop_t *loop, uint64_t when_ms, loop_cb_t cb
     return req->id;
 }
 
-int stealthim_loop_cancel_timer(loop_t *loop, timer_id_t id) {
+int stim_loop_cancel_timer(loop_t *loop, timer_id_t id) {
     if (!loop) return -1;
     pthread_mutex_lock(&loop->lock);
     for (int i = 0; i < loop->heap_size; i++) {
@@ -340,7 +340,7 @@ static void handle_select_handle_event(loop_t *loop, handle_req_t *req) {
             continue;
         } else if (r == 0) {
             // peer closed: unregister (这会标记 closing 并安排释放)
-            stealthim_loop_unregister_handle(loop, (void *)(intptr_t)req->fd, false);
+            stim_loop_unregister_handle(loop, (void *)(intptr_t)req->fd, false);
             break;
         } else {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -348,7 +348,7 @@ static void handle_select_handle_event(loop_t *loop, handle_req_t *req) {
                 break;
             } else {
                 // error: unregister
-                stealthim_loop_unregister_handle(loop, (void *)(intptr_t)req->fd, true);
+                stim_loop_unregister_handle(loop, (void *)(intptr_t)req->fd, true);
                 break;
             }
         }
@@ -469,7 +469,7 @@ static void *loop_thread_fn(void *param) {
     return NULL;
 }
 
-loop_t *stealthim_loop_create() {
+loop_t *stim_loop_create() {
     loop_t *loop = calloc(1, sizeof(loop_t));
     if (!loop) return NULL;
 
@@ -503,12 +503,12 @@ loop_t *stealthim_loop_create() {
     return loop;
 }
 
-void stealthim_loop_run(loop_t *loop) {
+void stim_loop_run(loop_t *loop) {
     if (!loop) return;
     pthread_create(&loop->thread, NULL, loop_thread_fn, loop);
 }
 
-void stealthim_loop_stop(loop_t *loop) {
+void stim_loop_stop(loop_t *loop) {
     if (!loop) return;
     loop->stop_flag = 1;
     // 唤醒 select
@@ -522,9 +522,9 @@ void stealthim_loop_stop(loop_t *loop) {
     }
 }
 
-void stealthim_loop_destroy(loop_t *loop) {
+void stim_loop_destroy(loop_t *loop) {
     if (!loop) return;
-    stealthim_loop_stop(loop);
+    stim_loop_stop(loop);
 
     // close wake pipe
     close(loop->wake_r);
